@@ -64,18 +64,21 @@ async function apiPost(pin, action, payload = {}) {
 
 // ── 面談頻度 ──────────────────────────────────────────────
 // ageGroup: "A"=44歳以下, "B"=45歳以上
-function calcFreq(status, ageGroup, joinType) {
+function calcFreq(status, ageGroup, joinType, ageSoon) {
   if (status === "new" && joinType !== "career")
-    return { freq:24, label:"2週/1回",   bg:"#FAECE7", color:"#993C1D" };
+    return { freq:24, label:"2週/1回",       bg:"#FAECE7", color:"#993C1D" };
   if (ageGroup === "B")
-    return { freq:3,  label:"4ヶ月/1回", bg:"#E6F1FB", color:"#185FA5" };
-  return   { freq:6,  label:"2ヶ月/1回", bg:"#EAF3DE", color:"#3B6D11" };
+    return { freq:3,  label:"4ヶ月/1回",     bg:"#E6F1FB", color:"#185FA5" };
+  if (ageSoon)
+    return { freq:6,  label:"2ヶ月 ※切替予定", bg:"#FFF8E1", color:"#B8860B" }; // 薄黄
+  return   { freq:6,  label:"2ヶ月/1回",     bg:"#EAF3DE", color:"#3B6D11" };
 }
 
-function freqCardStyle(status, ageGroup, joinType) {
+function freqCardStyle(status, ageGroup, joinType, ageSoon) {
   if (status === "maternity")                        return { bg:"#F3F0F9", border:"#C9B8E8" };
   if (status === "new" && joinType !== "career")     return { bg:"#FFF0E8", border:"#F5C4A0" };
   if (ageGroup === "B")                              return { bg:"#EAF2FB", border:"#A8C9EF" };
+  if (ageSoon)                                       return { bg:"#FFFDE7", border:"#FFD54F" }; // 薄黄：切替予定
   return                                                    { bg:"#F0F7E6", border:"#BAE09A" };
 }
 
@@ -247,7 +250,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose }) {
 // ── PlayerCard ────────────────────────────────────────────
 function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   onLongPress, onTap, onDragStart, onDragMove, onDragEnd }) {
-  const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType);
+  const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon);
   const pressTimer = useRef(null);
   const pressOrigin= useRef(null);
   const didDrag    = useRef(false);
@@ -309,16 +312,107 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   );
 }
 
+// ── ListenerHeader（長押しドラッグで列並び替え） ──────────
+function ListenerHeader({ listener, isAdmin, isHighlight, isDragTarget, isListenerDragging,
+  isListenerDragOver, selectedPid, dragPid, showDetail, setShowDetail,
+  onListenerDragStart, onListenerDragMove, onListenerDragEnd,
+  activeLoad, pct, isWarn, players }) {
+  const pressTimer = useRef(null);
+  const pressOrigin = useRef(null);
+  const didDrag = useRef(false);
+  const LONG_MS = 800, DRAG_PX = 6;
+
+  const handlePointerDown = e => {
+    if (!isAdmin) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pressOrigin.current = { x:e.clientX, y:e.clientY };
+    didDrag.current = false;
+    pressTimer.current = setTimeout(()=>{
+      // 長押し → ドラッグ準備（カラムが少し浮く）
+      onListenerDragStart(listener.id, e.clientX, e.clientY);
+    }, LONG_MS);
+  };
+  const handlePointerMove = e => {
+    if (!pressOrigin.current) return;
+    const dx=e.clientX-pressOrigin.current.x, dy=e.clientY-pressOrigin.current.y;
+    if (Math.sqrt(dx*dx+dy*dy) > DRAG_PX) {
+      if (!didDrag.current) {
+        didDrag.current = true;
+        if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
+        onListenerDragStart(listener.id, e.clientX, e.clientY);
+      }
+      onListenerDragMove(e.clientX, e.clientY);
+    }
+  };
+  const handlePointerUp = e => {
+    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
+    if (didDrag.current) onListenerDragEnd(e.clientX, e.clientY);
+    else if (!didDrag.current && !selectedPid) setShowDetail(v=>!v);
+    didDrag.current = false;
+    pressOrigin.current = null;
+  };
+
+  const isDraggingThis = isListenerDragging;
+  const outline = isHighlight ? "3px solid #FFD700"
+    : isDragTarget ? "3px solid #00CFFF"
+    : isListenerDragOver ? "3px solid #FF6B35" : "none";
+  const shadow = isHighlight ? "0 0 12px rgba(255,215,0,0.7)"
+    : isDragTarget ? "0 0 14px rgba(0,207,255,0.7)"
+    : isListenerDragOver ? "0 0 14px rgba(255,107,53,0.6)" : "none";
+
+  return (
+    <div
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onClick={e=>{ if(selectedPid) return; }}
+      style={{ borderRadius:8, padding:"6px 8px", textAlign:"center",
+        background: listener.bg || listener.color,
+        border: `1.5px solid ${listener.color}`,
+        outline, outlineOffset: outline!=="none" ? 2 : 0,
+        boxShadow: shadow,
+        cursor: isAdmin ? (isDraggingThis?"grabbing":"grab") : "pointer",
+        userSelect:"none", touchAction:"none",
+        opacity: isDraggingThis ? 0.6 : 1,
+        transform: isDraggingThis ? "scale(1.05)" : "scale(1)",
+        transition:"opacity 0.15s, transform 0.15s, box-shadow 0.2s" }}>
+      <div style={{ fontSize:11, fontWeight:700, color:listener.color }}>
+        {listener.name}{isWarn&&!showDetail?" ⚠":""}
+        {isAdmin && !selectedPid && !dragPid && (
+          <span style={{ fontSize:8, color:listener.color, opacity:0.5, marginLeft:3 }}>⠿</span>
+        )}
+      </div>
+      <div style={{ fontSize:9, color:listener.color, opacity:0.7, marginTop:1 }}>{players.length}名</div>
+      {showDetail && (
+        <>
+          <div style={{ marginTop:5, background:`${listener.color}30`, borderRadius:4, height:4 }}>
+            <div style={{ width:`${pct}%`, height:4, borderRadius:4, background:isWarn?"#E53935":listener.color }} />
+          </div>
+          <div style={{ fontSize:11, fontWeight:600, marginTop:2, color:isWarn?"#E53935":listener.color }}>年{activeLoad}回</div>
+        </>
+      )}
+      {isAdmin&&(selectedPid||(dragPid&&isDragTarget))&&(
+        <div style={{ fontSize:9, color:listener.color, marginTop:2, fontWeight:700 }}>← ここへ移動</div>
+      )}
+      {isAdmin && isListenerDragOver && (
+        <div style={{ fontSize:9, color:"#FF6B35", marginTop:2, fontWeight:700 }}>↔ ここと入替</div>
+      )}
+    </div>
+  );
+}
+
 // ── ListenerColumn ────────────────────────────────────────
 function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSelectPlayer,
   onEditPlayer, onAddPlayer, onMoveTo, highlightLid, highlightPid,
-  dragOverLid, dragPid, dragOverPid, dragOverPos, onDragStart, onDragMove, onDragEnd }) {
+  dragOverLid, dragPid, dragOverPid, dragOverPos, onDragStart, onDragMove, onDragEnd,
+  isListenerDragging, isListenerDragOver, onListenerDragStart, onListenerDragMove, onListenerDragEnd }) {
   const [showDetail, setShowDetail] = useState(false);
   const isHighlight  = highlightLid===listener.id;
   const isDragTarget = dragOverLid===listener.id;
 
   const activeLoad = players.filter(p=>p.status!=="maternity")
-    .reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType).freq, 0);
+    .reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon).freq, 0);
   const pct    = maxLoad>0?Math.round((activeLoad/maxLoad)*100):0;
   const isWarn = activeLoad>=LOAD_WARN;
 
@@ -326,31 +420,27 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
     <div id={`listener-col-${listener.id}`} data-listener-id={listener.id}
       style={{ minWidth:88, maxWidth:88, display:"flex", flexDirection:"column", gap:3 }}
       onClick={()=>{ if(isAdmin&&selectedPid) onMoveTo(listener.id); }}>
-      <div onClick={e=>{ if(!selectedPid){e.stopPropagation();setShowDetail(v=>!v);} }}
-        style={{ borderRadius:8, padding:"6px 8px", textAlign:"center",
-          background:listener.bg||listener.color,
-          border:`1.5px solid ${listener.color}`,
-          outline:isHighlight?"3px solid #FFD700":isDragTarget?"3px solid #00CFFF":"none",
-          outlineOffset:(isHighlight||isDragTarget)?2:0,
-          boxShadow:isHighlight?"0 0 12px rgba(255,215,0,0.7)":isDragTarget?"0 0 14px rgba(0,207,255,0.7)":"none",
-          cursor:isAdmin&&(selectedPid||dragPid)?"copy":"pointer",
-          userSelect:"none", transition:"box-shadow 0.2s" }}>
-        <div style={{ fontSize:11, fontWeight:700, color:listener.color }}>
-          {listener.name}{isWarn&&!showDetail?" ⚠":""}
-        </div>
-        <div style={{ fontSize:9, color:listener.color, opacity:0.7, marginTop:1 }}>{players.length}名</div>
-        {showDetail && (
-          <>
-            <div style={{ marginTop:5, background:`${listener.color}30`, borderRadius:4, height:4 }}>
-              <div style={{ width:`${pct}%`, height:4, borderRadius:4, background:isWarn?"#E53935":listener.color }} />
-            </div>
-            <div style={{ fontSize:11, fontWeight:600, marginTop:2, color:isWarn?"#E53935":listener.color }}>年{activeLoad}回</div>
-          </>
-        )}
-        {isAdmin&&(selectedPid||(dragPid&&isDragTarget))&&(
-          <div style={{ fontSize:9, color:listener.color, marginTop:2, fontWeight:700 }}>← ここへ移動</div>
-        )}
-      </div>
+      {/* リスナー列ヘッダー（管理者モードで長押しドラッグ可） */}
+      <ListenerHeader
+        listener={listener}
+        isAdmin={isAdmin}
+        isHighlight={isHighlight}
+        isDragTarget={isDragTarget}
+        isListenerDragging={isListenerDragging}
+        isListenerDragOver={isListenerDragOver}
+        selectedPid={selectedPid}
+        dragPid={dragPid}
+        showDetail={showDetail}
+        setShowDetail={setShowDetail}
+        onListenerDragStart={onListenerDragStart}
+        onListenerDragMove={onListenerDragMove}
+        onListenerDragEnd={onListenerDragEnd}
+        activeLoad={activeLoad}
+        pct={pct}
+        isWarn={isWarn}
+        players={players}
+      />
+      {/* 以下は旧ヘッダーの内容をListenerHeaderに移動済み */}
       {players.map(p=>(
         <div key={p.id} id={`player-card-${p.id}`} data-player-id={p.id} style={{ position:"relative" }}>
           {dragOverPid===p.id&&dragOverPos==="before"&&(
@@ -417,6 +507,19 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
         <Field label="氏名 *">
           <input value={data.name} onChange={e=>setData(d=>({...d,name:e.target.value}))} placeholder="例: 田中 太郎" style={inp} />
         </Field>
+
+        {/* 生年月日・入社日：新規追加時のみ表示 */}
+        {isNew && (
+          <>
+            <Field label="生年月日">
+              <input type="date" value={data.dob||""} onChange={e=>setData(d=>({...d,dob:e.target.value}))} style={inp} />
+            </Field>
+            <Field label="入社日">
+              <input type="date" value={data.joinDate||""} onChange={e=>setData(d=>({...d,joinDate:e.target.value}))} style={inp} />
+            </Field>
+          </>
+        )}
+
         <Field label="入社区分">
           <select value={data.joinType||"newgrad"} onChange={e=>setData(d=>({...d,joinType:e.target.value}))} style={inp}>
             <option value="newgrad">新卒</option>
@@ -680,7 +783,48 @@ function App() {
   };
   const moveSelectedTo = (lid) => { if(!selectedPid) return; movePlayerTo(selectedPid,lid); setSelectedPid(null); };
 
-  // ── ドラッグ ──────────────────────────────────────────
+  // ── リスナー列並び替え ────────────────────────────────
+  const [listenerDragId,  setListenerDragId]  = useState(null);
+  const [listenerDragPos, setListenerDragPos] = useState({x:0,y:0});
+  const [listenerOverId,  setListenerOverId]  = useState(null);
+
+  const handleListenerDragStart = (lid, x, y) => {
+    setListenerDragId(lid);
+    setListenerDragPos({x, y});
+  };
+  const handleListenerDragMove = (x, y) => {
+    setListenerDragPos({x, y});
+    const els = document.elementsFromPoint(x, y);
+    const colEl = els.find(el => el?.getAttribute?.("data-listener-id"));
+    const overId = colEl ? colEl.getAttribute("data-listener-id") : null;
+    if (overId && overId !== listenerDragId) setListenerOverId(overId);
+  };
+  const handleListenerDragEnd = async (x, y) => {
+    if (listenerDragId && listenerOverId) {
+      // 並び替え実行
+      setListeners(prev => {
+        const arr = [...prev];
+        const si = arr.findIndex(l => l.id === listenerDragId);
+        const ti = arr.findIndex(l => l.id === listenerOverId);
+        if (si === -1 || ti === -1) return prev;
+        const [moved] = arr.splice(si, 1);
+        arr.splice(ti, 0, moved);
+        // order値を更新
+        const withOrder = arr.map((l, idx) => ({ ...l, order: idx }));
+        // GASに保存
+        if (pin) {
+          apiPost(pin, "saveListenerOrder", {
+            order: withOrder.map(l => ({ id: l.id, order: l.order }))
+          }).catch(err => console.error("リスナー順保存エラー:", err));
+        }
+        return withOrder;
+      });
+    }
+    setListenerDragId(null);
+    setListenerOverId(null);
+  };
+
+  // ── プレイヤードラッグ ────────────────────────────────
   const handleDragStart = (pid,x,y) => { setDragPid(pid); setDragPos({x,y}); setSelectedPid(null); };
   const handleDragMove  = (x,y) => {
     setDragPos({x,y});
@@ -770,7 +914,7 @@ function App() {
     boardTab==="youth"  ? p.ageGroup==="A" :
     boardTab==="senior" ? p.ageGroup==="B" : true
   );
-  const loads   = boardListeners.map(l=>boardPlayers.filter(p=>p.lid===l.id).reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType).freq,0));
+  const loads   = boardListeners.map(l=>boardPlayers.filter(p=>p.lid===l.id).reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon).freq,0));
   const maxLoad = Math.max(...loads,1);
 
   // サマリ
@@ -838,10 +982,10 @@ function App() {
           {keyword.length===0&&<div style={{ textAlign:"center", color:"var(--color-text-tertiary)", padding:"60px 24px" }}>名前の一部を入力してください</div>}
           {keyword.length>0&&searchResults.length===0&&<div style={{ textAlign:"center", color:"var(--color-text-tertiary)", padding:"60px 24px" }}>「{keyword}」に一致するプレイヤーが見つかりません</div>}
           {searchResults.map(p=>{
-            const f=calcFreq(p.status,p.ageGroup,p.joinType);
+            const f=calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon);
             const lName=listeners.find(l=>l.id===p.lid)?.name||"—";
             const lColor=listeners.find(l=>l.id===p.lid)?.color||"#888";
-            const cs=freqCardStyle(p.status,p.ageGroup,p.joinType);
+            const cs=freqCardStyle(p.status,p.ageGroup,p.joinType,p.ageSoon);
             return (
               <div key={p.id} onClick={()=>handleSearchSelect(p)}
                 style={{ padding:"12px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", background:cs.bg, cursor:"pointer", borderRadius:8, marginBottom:4 }}>
@@ -1046,7 +1190,13 @@ function App() {
                 onEditPlayer={p=>setEditPlayer(p)} onAddPlayer={lid=>setAddForLid(lid)}
                 onMoveTo={moveSelectedTo} highlightLid={highlightLid} highlightPid={highlightPid}
                 dragOverLid={dragOverLid} dragPid={dragPid} dragOverPid={dragOverPid} dragOverPos={dragOverPos}
-                onDragStart={handleDragStart} onDragMove={handleDragMove} onDragEnd={handleDragEnd} />
+                onDragStart={handleDragStart} onDragMove={handleDragMove} onDragEnd={handleDragEnd}
+                isListenerDragging={listenerDragId===l.id}
+                isListenerDragOver={listenerOverId===l.id}
+                onListenerDragStart={handleListenerDragStart}
+                onListenerDragMove={handleListenerDragMove}
+                onListenerDragEnd={handleListenerDragEnd}
+              />
             );
           })}
         </div>
@@ -1055,7 +1205,7 @@ function App() {
       {/* ドラッグゴースト */}
       {dragPid&&(()=>{
         const dp=players.find(p=>p.id===dragPid); if(!dp) return null;
-        const cs=freqCardStyle(dp.status,dp.ageGroup,dp.joinType);
+        const cs=freqCardStyle(dp.status,dp.ageGroup,dp.joinType,dp.ageSoon);
         return <div style={{ position:"fixed", zIndex:999, pointerEvents:"none", left:dragPos.x-44, top:dragPos.y-20, width:88, padding:"5px 7px", background:cs.bg, border:`2px solid ${cs.border}`, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,0.3)", transform:"scale(1.1) rotate(2deg)", opacity:0.95 }}>
           <span style={{ fontSize:11, fontWeight:600, display:"block", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{dp.name}</span>
         </div>;
@@ -1075,7 +1225,7 @@ function App() {
       {boardTab!=="detail"&&(
         <div style={{ background:"var(--color-background-secondary)", borderRadius:10, padding:"8px 14px", margin:"4px 14px 14px", fontSize:11, color:"var(--color-text-secondary)", display:"flex", gap:12, flexWrap:"wrap", alignItems:"center" }}>
           <span style={{ fontWeight:600, fontSize:10 }}>面談頻度</span>
-          {[{bg:"#FFF0E8",border:"#F5C4A0",label:"新人 2週/1回"},{bg:"#F0F7E6",border:"#BAE09A",label:"44歳以下 2ヶ月"},{bg:"#EAF2FB",border:"#A8C9EF",label:"45歳以上 4ヶ月"},{bg:"#F3F0F9",border:"#C9B8E8",label:"産休"}].map(s=>(
+          {[{bg:"#FFF0E8",border:"#F5C4A0",label:"新人 2週/1回"},{bg:"#F0F7E6",border:"#BAE09A",label:"44歳以下 2ヶ月"},{bg:"#FFFDE7",border:"#FFD54F",label:"44歳→切替予定"},{bg:"#EAF2FB",border:"#A8C9EF",label:"45歳以上 4ヶ月"},{bg:"#F3F0F9",border:"#C9B8E8",label:"産休"}].map(s=>(
             <span key={s.label} style={{ display:"flex", alignItems:"center", gap:4 }}>
               <span style={{ width:18, height:10, borderRadius:3, background:s.bg, border:`1px solid ${s.border}`, display:"inline-block" }} />
               <span style={{ fontSize:10 }}>{s.label}</span>
