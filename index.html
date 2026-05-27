@@ -476,7 +476,7 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
 }
 
 // ── HistoryPage ───────────────────────────────────────────
-function HistoryPage({ retired, listeners, onRestore, onDelete, onClose }) {
+function HistoryPage({ retired, listeners, onRestore, onDelete, onClose, isAdmin }) {
   const [search, setSearch] = useState("");
   const filtered = retired.filter(r=>r.name.includes(search));
   return (
@@ -508,10 +508,14 @@ function HistoryPage({ retired, listeners, onRestore, onDelete, onClose }) {
                     {r.retiredYear}年{r.retiredMonth}月 退職　／　元担当: {listeners.find(l=>l.id===r.lid)?.name||"—"}
                   </div>
                 </div>
-                <button onClick={()=>onRestore(r.id)}
-                  style={{ fontSize:12, padding:"6px 14px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>復帰</button>
-                <button onClick={()=>onDelete(r.id)}
-                  style={{ fontSize:12, padding:"6px 12px", borderRadius:8, border:"0.5px solid #C00000", color:"#C00000", background:"none", cursor:"pointer" }}>削除</button>
+                {isAdmin && (
+                  <>
+                    <button onClick={()=>onRestore(r.id)}
+                      style={{ fontSize:12, padding:"6px 14px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>復帰</button>
+                    <button onClick={()=>onDelete(r.id)}
+                      style={{ fontSize:12, padding:"6px 12px", borderRadius:8, border:"0.5px solid #C00000", color:"#C00000", background:"none", cursor:"pointer" }}>削除</button>
+                  </>
+                )}
               </div>
             </div>
           ))
@@ -775,7 +779,7 @@ function App() {
   );
   if (showHistory) return (
     <HistoryPage retired={retired} listeners={listeners}
-      onRestore={restoreRetired} onDelete={deleteRetired} onClose={()=>setShowHistory(false)} />
+      onRestore={restoreRetired} onDelete={deleteRetired} onClose={()=>setShowHistory(false)} isAdmin={isAdmin} />
   );
   if (showSettings) return (
     <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column", minHeight:"100vh" }}>
@@ -980,10 +984,14 @@ function App() {
                       {r.retiredYear}年{r.retiredMonth}月 退職　／　元担当: {listeners.find(l=>l.id===r.lid)?.name||"—"}
                     </div>
                   </div>
-                  <button onClick={()=>restoreRetired(r.id)}
-                    style={{ fontSize:12, padding:"5px 12px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer", flexShrink:0 }}>復帰</button>
-                  <button onClick={()=>deleteRetired(r.id)}
-                    style={{ fontSize:12, padding:"5px 10px", borderRadius:8, border:"0.5px solid #C00000", color:"#C00000", background:"none", cursor:"pointer", flexShrink:0 }}>削除</button>
+                  {isAdmin && (
+                    <>
+                      <button onClick={()=>restoreRetired(r.id)}
+                        style={{ fontSize:12, padding:"5px 12px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer", flexShrink:0 }}>復帰</button>
+                      <button onClick={()=>deleteRetired(r.id)}
+                        style={{ fontSize:12, padding:"5px 10px", borderRadius:8, border:"0.5px solid #C00000", color:"#C00000", background:"none", cursor:"pointer", flexShrink:0 }}>削除</button>
+                    </>
+                  )}
                 </div>
               ))
             }
