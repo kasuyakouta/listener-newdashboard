@@ -64,21 +64,24 @@ async function apiPost(pin, action, payload = {}) {
 
 // ── 面談頻度 ──────────────────────────────────────────────
 // ageGroup: "A"=44歳以下, "B"=45歳以上
-function calcFreq(status, ageGroup, joinType, ageSoon) {
+function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
+  if (status === "new" && statusSoon)
+    return { freq:24, label:"2週→2ヶ月 切替予定", bg:"#FFEDE0", color:"#C0501A" }; // サーモン
   if (status === "new" && joinType !== "career")
-    return { freq:24, label:"2週/1回",       bg:"#FAECE7", color:"#993C1D" };
+    return { freq:24, label:"2週/1回",           bg:"#FAECE7", color:"#993C1D" };
   if (ageGroup === "B")
-    return { freq:3,  label:"4ヶ月/1回",     bg:"#E6F1FB", color:"#185FA5" };
+    return { freq:3,  label:"4ヶ月/1回",         bg:"#E6F1FB", color:"#185FA5" };
   if (ageSoon)
-    return { freq:6,  label:"2ヶ月 ※切替予定", bg:"#FFF8E1", color:"#B8860B" }; // 薄黄
-  return   { freq:6,  label:"2ヶ月/1回",     bg:"#EAF3DE", color:"#3B6D11" };
+    return { freq:6,  label:"2ヶ月 ※切替予定",   bg:"#FFF8E1", color:"#B8860B" };
+  return   { freq:6,  label:"2ヶ月/1回",         bg:"#EAF3DE", color:"#3B6D11" };
 }
 
-function freqCardStyle(status, ageGroup, joinType, ageSoon) {
+function freqCardStyle(status, ageGroup, joinType, ageSoon, statusSoon) {
   if (status === "maternity")                        return { bg:"#F3F0F9", border:"#C9B8E8" };
+  if (status === "new" && statusSoon)                return { bg:"#FFE8D6", border:"#FF9A6C" }; // 薄サーモン：新人→切替予定
   if (status === "new" && joinType !== "career")     return { bg:"#FFF0E8", border:"#F5C4A0" };
   if (ageGroup === "B")                              return { bg:"#EAF2FB", border:"#A8C9EF" };
-  if (ageSoon)                                       return { bg:"#FFFDE7", border:"#FFD54F" }; // 薄黄：切替予定
+  if (ageSoon)                                       return { bg:"#FFFDE7", border:"#FFD54F" }; // 薄黄：44歳→切替予定
   return                                                    { bg:"#F0F7E6", border:"#BAE09A" };
 }
 
@@ -250,7 +253,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose }) {
 // ── PlayerCard ────────────────────────────────────────────
 function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   onLongPress, onTap, onDragStart, onDragMove, onDragEnd }) {
-  const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon);
+  const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon, player.statusSoon);
   const pressTimer = useRef(null);
   const pressOrigin= useRef(null);
   const didDrag    = useRef(false);
@@ -412,7 +415,7 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
   const isDragTarget = dragOverLid===listener.id;
 
   const activeLoad = players.filter(p=>p.status!=="maternity")
-    .reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon).freq, 0);
+    .reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon).freq, 0);
   const pct    = maxLoad>0?Math.round((activeLoad/maxLoad)*100):0;
   const isWarn = activeLoad>=LOAD_WARN;
 
@@ -665,9 +668,29 @@ function App() {
   const [highlightPid, setHighlightPid] = useState(null);
   const [showSearch,   setShowSearch]   = useState(false);
   const [searchQuery,  setSearchQuery]  = useState("");
+  const [searchLid,    setSearchLid]    = useState(""); // リスナー絞り込み
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
   const [dismissedIds, setDismissedIds] = useState([]);
+  const changeLogRef = useRef([]); // 未送信の変更ログバッファ
+  const logChange = useCallback((playerName, changeType, before, after) => {
+    const entry = {
+      datetime:   new Date().toLocaleString("ja-JP"),
+      playerName,
+      changeType,
+      before: String(before||""),
+      after:  String(after||""),
+    };
+    changeLogRef.current = [...changeLogRef.current, entry];
+  }, []);
+  const flushChangeLog = useCallback(async (currentPin) => {
+    if (!currentPin || changeLogRef.current.length === 0) return;
+    const logs = [...changeLogRef.current];
+    changeLogRef.current = [];
+    try {
+      await apiPost(currentPin, "saveChangeLog", { logs });
+    } catch(e) { console.error("ChangeLog保存エラー:", e); }
+  }, []);
 
   // ── ログイン & データ取得 ─────────────────────────────
   const handleLogin = async (enteredPin) => {
@@ -685,22 +708,33 @@ function App() {
     }
   };
 
-  // 初回: PIN不要でデータ取得（管理者モードのみPIN必要）
-  useEffect(()=>{
-    const load = async () => {
-      try {
-        const data = await apiGet("public"); // GAS側でpublicは読み取りのみ許可
-        setPlayers(data.players   || []);
-        setListeners(data.listeners|| []);
-        setRetired(data.retired   || []);
-        setAppState("dashboard");
-      } catch(e) {
-        setLoadError(e.message);
-        setAppState("error");
+  // 初回 + 自動リロード（7分ごと）
+  const loadData = useCallback(async (silent=false) => {
+    if (!silent) setAppState("loading");
+    try {
+      const data = await apiGet("public");
+      setPlayers(prev => {
+        // 管理者モード中は更新しない（編集中のデータを保護）
+        if (silent && isAdmin) return prev;
+        return data.players || [];
+      });
+      if (!silent || !isAdmin) {
+        setListeners(data.listeners || []);
+        setRetired(data.retired    || []);
       }
-    };
-    load();
-  }, []);
+      if (!silent) setAppState("dashboard");
+    } catch(e) {
+      if (!silent) { setLoadError(e.message); setAppState("error"); }
+    }
+  }, [isAdmin]);
+
+  useEffect(()=>{ loadData(false); }, []);
+
+  // 7分ごとに自動リロード（管理者モード中はスキップ）
+  useEffect(()=>{
+    const timer = setInterval(()=>loadData(true), 7 * 60 * 1000);
+    return ()=>clearInterval(timer);
+  }, [loadData]);
 
   // ── 自動保存（変更後2秒） ─────────────────────────────
   const triggerSave = useCallback((newPlayers, newRetired) => {
@@ -712,6 +746,7 @@ function App() {
         if (newRetired !== undefined) {
           await apiPost(pin, "saveRetired", { retired: newRetired });
         }
+        await flushChangeLog(pin); // 変更履歴を一括送信
         setSaveMsg("✓ 保存しました");
         setTimeout(()=>setSaveMsg(""), 2000);
       } catch(e) {
@@ -720,7 +755,7 @@ function App() {
         setSaving(false);
       }
     }, 2000);
-  }, [pin]);
+  }, [pin, flushChangeLog]);
 
   // ── プレイヤー操作 ────────────────────────────────────
   const updatePlayer = (id, data) => {
@@ -766,6 +801,10 @@ function App() {
         const days=changedAt?Math.floor((now-changedAt)/86400000):999;
         if(days>=PREV_DAYS) newPrevLid=p.lid;
       }
+      // 変更履歴を記録
+      const fromName = listeners.find(l=>l.id===p.lid)?.name || p.lid;
+      const toName   = listeners.find(l=>l.id===targetLid)?.name || targetLid;
+      logChange(p.name, "担当変更", fromName, toName);
       return {...p, lid:targetLid, prevLid:newPrevLid, lastLidChangedAt:new Date().toISOString().split("T")[0]};
     });
     setPlayers(next);
@@ -891,8 +930,12 @@ function App() {
 
   // ── 検索 ─────────────────────────────────────────────
   const normalizeQ = s => s ? s.replace(/\u9AD9/g,"\u9AD8").toLowerCase() : "";
-  const searchResults = searchQuery.trim().length>0
-    ? players.filter(p=>normalizeQ(p.name).includes(normalizeQ(searchQuery.trim()))&&p.status!=="maternity")
+  const searchResults = (searchQuery.trim().length>0 || searchLid)
+    ? players.filter(p=>{
+        const nameMatch = searchQuery.trim().length===0 || normalizeQ(p.name).includes(normalizeQ(searchQuery.trim()));
+        const lidMatch  = !searchLid || p.lid===searchLid;
+        return nameMatch && lidMatch && p.status!=="maternity";
+      })
     : [];
   const handleSearchSelect = (p) => {
     setBoardTab(p.ageGroup==="B"?"senior":"youth");
@@ -914,7 +957,7 @@ function App() {
     boardTab==="youth"  ? p.ageGroup==="A" :
     boardTab==="senior" ? p.ageGroup==="B" : true
   );
-  const loads   = boardListeners.map(l=>boardPlayers.filter(p=>p.lid===l.id).reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon).freq,0));
+  const loads   = boardListeners.map(l=>boardPlayers.filter(p=>p.lid===l.id).reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon).freq,0));
   const maxLoad = Math.max(...loads,1);
 
   // サマリ
@@ -968,24 +1011,40 @@ function App() {
     return (
       <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column", height:"100vh", maxHeight:"100vh", background:"var(--color-background-primary)" }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", flexShrink:0 }}>
-          <button onClick={()=>{setShowSearch(false);setSearchQuery("");}} style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none", background:"var(--color-background-secondary)", color:"var(--color-text-secondary)", cursor:"pointer", flexShrink:0 }}>← 戻る</button>
+          <button onClick={()=>{setShowSearch(false);setSearchQuery("");setSearchLid("");}} style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none", background:"var(--color-background-secondary)", color:"var(--color-text-secondary)", cursor:"pointer", flexShrink:0 }}>← 戻る</button>
           <input autoFocus placeholder="名前を入力（例：高橋、正樹）" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}
             style={{ flex:1, fontSize:15, padding:"9px 12px", borderRadius:9, border:"1.5px solid #185FA5", outline:"none" }} />
           {searchQuery&&<button onClick={()=>setSearchQuery("")} style={{ fontSize:18, padding:"2px 8px", border:"none", background:"none", color:"var(--color-text-tertiary)", cursor:"pointer", flexShrink:0 }}>✕</button>}
         </div>
-        {keyword.length>0&&(
-          <div style={{ padding:"6px 16px", background:"var(--color-background-secondary)", borderBottom:"0.5px solid var(--color-border-tertiary)", fontSize:12, color:"var(--color-text-secondary)", flexShrink:0 }}>
-            <strong style={{ color:"#185FA5" }}>{searchResults.length}件</strong> ヒット
-          </div>
-        )}
+        {/* リスナー絞り込みフィルター */}
+        <div style={{ padding:"8px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", flexShrink:0, overflowX:"auto", display:"flex", gap:6, WebkitOverflowScrolling:"touch" }}>
+          <button onClick={()=>setSearchLid("")}
+            style={{ fontSize:11, padding:"4px 10px", borderRadius:16, border:"none", cursor:"pointer", whiteSpace:"nowrap", flexShrink:0,
+              background:searchLid===""?"#185FA5":"var(--color-background-secondary)",
+              color:searchLid===""?"#fff":"var(--color-text-secondary)", fontWeight:searchLid===""?600:400 }}>
+            全員
+          </button>
+          {listeners.map(l=>(
+            <button key={l.id} onClick={()=>setSearchLid(l.id===searchLid?"":l.id)}
+              style={{ fontSize:11, padding:"4px 10px", borderRadius:16, border:`1.5px solid ${l.color}`, cursor:"pointer", whiteSpace:"nowrap", flexShrink:0,
+                background:searchLid===l.id?l.bg:"transparent",
+                color:l.color, fontWeight:searchLid===l.id?700:400 }}>
+              {l.name}
+            </button>
+          ))}
+        </div>
+        <div style={{ padding:"6px 16px", background:"var(--color-background-secondary)", borderBottom:"0.5px solid var(--color-border-tertiary)", fontSize:12, color:"var(--color-text-secondary)", flexShrink:0 }}>
+          <strong style={{ color:"#185FA5" }}>{searchResults.length}件</strong> ヒット
+          {searchLid && <span style={{ marginLeft:8, color:listeners.find(l=>l.id===searchLid)?.color, fontWeight:600 }}>● {listeners.find(l=>l.id===searchLid)?.name}担当</span>}
+        </div>
         <div style={{ overflowY:"auto", flex:1, WebkitOverflowScrolling:"touch", padding:"6px 14px 24px" }}>
           {keyword.length===0&&<div style={{ textAlign:"center", color:"var(--color-text-tertiary)", padding:"60px 24px" }}>名前の一部を入力してください</div>}
           {keyword.length>0&&searchResults.length===0&&<div style={{ textAlign:"center", color:"var(--color-text-tertiary)", padding:"60px 24px" }}>「{keyword}」に一致するプレイヤーが見つかりません</div>}
           {searchResults.map(p=>{
-            const f=calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon);
+            const f=calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon);
             const lName=listeners.find(l=>l.id===p.lid)?.name||"—";
             const lColor=listeners.find(l=>l.id===p.lid)?.color||"#888";
-            const cs=freqCardStyle(p.status,p.ageGroup,p.joinType,p.ageSoon);
+            const cs=freqCardStyle(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon);
             return (
               <div key={p.id} onClick={()=>handleSearchSelect(p)}
                 style={{ padding:"12px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", background:cs.bg, cursor:"pointer", borderRadius:8, marginBottom:4 }}>
@@ -1169,6 +1228,54 @@ function App() {
               ))
             }
           </div>
+          {/* ⑦ 次期切替予告一覧 */}
+          {(()=>{
+            const today = new Date();
+            // 次の期開始日を求める
+            const nm = today.getMonth(); // 0-11
+            const nextPeriod = nm < 6
+              ? new Date(today.getFullYear(), 6, 1)   // 7/1
+              : new Date(today.getFullYear()+1, 0, 1); // 翌1/1
+            const nextLabel = nm < 6 ? `${today.getFullYear()}年7月1日（後期）` : `${today.getFullYear()+1}年1月1日（前期）`;
+
+            // new→normal 切替予定（statusSoonで判定）
+            const normalSwitch = players.filter(p=>p.statusSoon===true);
+            // 45歳→区分B切替予定
+            const ageSwitch = players.filter(p=>p.ageSoon===true && p.ageGroup==="A");
+
+            if (normalSwitch.length===0 && ageSwitch.length===0) return null;
+            return (
+              <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+                <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>📅 次期切替予告</div>
+                <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:12 }}>次の期開始日：{nextLabel}</div>
+                {ageSwitch.length>0&&(
+                  <div style={{ marginBottom:12 }}>
+                    <div style={{ fontSize:12, fontWeight:600, color:"#B8860B", marginBottom:6 }}>🔶 区分A→B（45歳以上へ）{ageSwitch.length}名</div>
+                    {ageSwitch.map(p=>(
+                      <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#FFFDE7", borderRadius:8, marginBottom:4 }}>
+                        <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                        <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
+                        <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>切替予定</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {normalSwitch.length>0&&(
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 新人→通常（GAS判定）{normalSwitch.length}名</div>
+                    {normalSwitch.map(p=>(
+                      <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#F0F7E6", borderRadius:8, marginBottom:4 }}>
+                        <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                        <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
+                        <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#BAE09A", color:"#1E5C10", fontWeight:600 }}>新人中</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* パスワード変更（管理者のみ） */}
           {isAdmin&&(
             <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
@@ -1205,7 +1312,7 @@ function App() {
       {/* ドラッグゴースト */}
       {dragPid&&(()=>{
         const dp=players.find(p=>p.id===dragPid); if(!dp) return null;
-        const cs=freqCardStyle(dp.status,dp.ageGroup,dp.joinType,dp.ageSoon);
+        const cs=freqCardStyle(dp.status,dp.ageGroup,dp.joinType,dp.ageSoon,dp.statusSoon);
         return <div style={{ position:"fixed", zIndex:999, pointerEvents:"none", left:dragPos.x-44, top:dragPos.y-20, width:88, padding:"5px 7px", background:cs.bg, border:`2px solid ${cs.border}`, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,0.3)", transform:"scale(1.1) rotate(2deg)", opacity:0.95 }}>
           <span style={{ fontSize:11, fontWeight:600, display:"block", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{dp.name}</span>
         </div>;
@@ -1225,7 +1332,7 @@ function App() {
       {boardTab!=="detail"&&(
         <div style={{ background:"var(--color-background-secondary)", borderRadius:10, padding:"8px 14px", margin:"4px 14px 14px", fontSize:11, color:"var(--color-text-secondary)", display:"flex", gap:12, flexWrap:"wrap", alignItems:"center" }}>
           <span style={{ fontWeight:600, fontSize:10 }}>面談頻度</span>
-          {[{bg:"#FFF0E8",border:"#F5C4A0",label:"新人 2週/1回"},{bg:"#F0F7E6",border:"#BAE09A",label:"44歳以下 2ヶ月"},{bg:"#FFFDE7",border:"#FFD54F",label:"44歳→切替予定"},{bg:"#EAF2FB",border:"#A8C9EF",label:"45歳以上 4ヶ月"},{bg:"#F3F0F9",border:"#C9B8E8",label:"産休"}].map(s=>(
+          {[{bg:"#FFF0E8",border:"#F5C4A0",label:"新人 2週/1回"},{bg:"#FFE8D6",border:"#FF9A6C",label:"新人→切替予定"},{bg:"#F0F7E6",border:"#BAE09A",label:"44歳以下 2ヶ月"},{bg:"#FFFDE7",border:"#FFD54F",label:"44歳→切替予定"},{bg:"#EAF2FB",border:"#A8C9EF",label:"45歳以上 4ヶ月"},{bg:"#F3F0F9",border:"#C9B8E8",label:"産休"}].map(s=>(
             <span key={s.label} style={{ display:"flex", alignItems:"center", gap:4 }}>
               <span style={{ width:18, height:10, borderRadius:3, background:s.bg, border:`1px solid ${s.border}`, display:"inline-block" }} />
               <span style={{ fontSize:10 }}>{s.label}</span>
