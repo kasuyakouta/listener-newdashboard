@@ -378,6 +378,16 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
   );
 }
 
+// ── Field（フォーム用ラベル付き入力欄） ──────────────────
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:4 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
 // ── EditPlayerSheet ───────────────────────────────────────
 function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetire, onClose }) {
   const init = player || { name:"", lid:defaultLid||"l1", status:"normal",
@@ -391,12 +401,6 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
     background:"var(--color-background-primary)", color:"var(--color-text-primary)",
     width:"100%", boxSizing:"border-box" };
   const STATUS_OPTS = [["normal","通常"],["new","新人"],["maternity","産休"]];
-  const Field = ({ label, children }) => (
-    <div style={{ marginBottom:12 }}>
-      <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:4 }}>{label}</div>
-      {children}
-    </div>
-  );
 
   return (
     <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column",
