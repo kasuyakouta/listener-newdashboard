@@ -523,7 +523,7 @@ function HistoryPage({ retired, listeners, onRestore, onDelete, onClose }) {
 
 // ── App ───────────────────────────────────────────────────
 function App() {
-  const [appState,    setAppState]    = useState("init"); // init|login|dashboard
+  const [appState,    setAppState]    = useState("loading"); // init|login|dashboard
   const [pin,         setPin]         = useState("");
   const [players,     setPlayers]     = useState([]);
   const [listeners,   setListeners]   = useState([]);
@@ -574,8 +574,22 @@ function App() {
     }
   };
 
-  // 初回: PINログイン画面を表示
-  useEffect(()=>{ setAppState("login"); }, []);
+  // 初回: PIN不要でデータ取得（管理者モードのみPIN必要）
+  useEffect(()=>{
+    const load = async () => {
+      try {
+        const data = await apiGet("public"); // GAS側でpublicは読み取りのみ許可
+        setPlayers(data.players   || []);
+        setListeners(data.listeners|| []);
+        setRetired(data.retired   || []);
+        setAppState("dashboard");
+      } catch(e) {
+        setLoadError(e.message);
+        setAppState("error");
+      }
+    };
+    load();
+  }, []);
 
   // ── 自動保存（変更後2秒） ─────────────────────────────
   const triggerSave = useCallback((newPlayers, newRetired) => {
@@ -749,9 +763,7 @@ function App() {
       <button onClick={()=>setAppState("login")} style={{ fontSize:14, padding:"8px 20px", borderRadius:9, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>再試行</button>
     </div>
   );
-  if (appState==="login") return (
-    <PinScreen title="Listener Dashboard" onSuccess={handleLogin} />
-  );
+
 
   // ── ページ切替 ────────────────────────────────────────
   if (showAdminPin) return <PinScreen title="管理者モード" onSuccess={handleAdminLogin} onCancel={()=>setShowAdminPin(false)} />;
