@@ -701,14 +701,13 @@ function App() {
 
   // ── 管理者ログイン時アラート ──────────────────────────
   const handleAdminLogin = (adminPin) => {
-    setIsAdmin(true); setShowAdminPin(false);
+    setIsAdmin(true);
+    setShowAdminPin(false);
+    setPin(adminPin); // ← PINを保存（保存時の認証に使用）
     const al=[];
     players.filter(p=>p.status==="maternity").forEach(p=>{
       if(p.returnDate&&new Date(p.returnDate)<=TODAY)
         al.push({type:"maternity", message:`${p.name}さんの産休復帰予定日を過ぎています。`});
-    });
-    players.filter(p=>p.ageGroup==="A"&&p.status!=="maternity").forEach(p=>{
-      // ageGroupはGASが最新判定→区分Bになりそうな人は別途通知不要（既に区分B）
     });
     if(al.length>0){setAlerts(al);setShowAlerts(true);setDismissedIds([]);}
   };
