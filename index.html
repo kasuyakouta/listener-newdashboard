@@ -222,14 +222,14 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose }) {
         <div style={{ overflowY:"auto", padding:"10px 12px", display:"flex", flexDirection:"column", gap:8 }}>
           {alerts.map((a,i)=>dismissed.includes(i)?null:(
             <div key={i} style={{
-              background:a.type==="maternity"?"#EAF3FB":a.type==="senior_current"?"#FFF0E0":"#FFFBE6",
-              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="senior_current"?"#F5A623":"#FFD93D"}`,
+              background:a.type==="maternity"?"#EAF3FB":a.type==="board_mismatch"?"#FFF0E0":"#FFFBE6",
+              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="board_mismatch"?"#F5A623":"#FFD93D"}`,
               borderRadius:10, padding:"10px 14px 10px 12px", fontSize:12, position:"relative" }}>
               <button onClick={()=>onDismiss(i)}
                 style={{ position:"absolute", top:6, right:8, fontSize:14, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-tertiary)" }}>✕</button>
               <div style={{ fontWeight:600, marginBottom:4, paddingRight:20,
-                color:a.type==="maternity"?"#185FA5":a.type==="senior_current"?"#C05A00":"#8A6800" }}>
-                {a.type==="maternity"?"🩵 産休復帰":a.type==="senior_current"?"🔴 区分切替（今期）":"⚠ 区分切替予告（次期）"}
+                color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":"#8A6800" }}>
+                {a.type==="maternity"?"🩵 産休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":"⚠ その他通知"}
               </div>
               <div style={{ color:"var(--color-text-primary)", lineHeight:1.5 }}>{a.message}</div>
             </div>
@@ -713,10 +713,35 @@ function App() {
     setShowAdminPin(false);
     setPin(adminPin); // ← PINを保存（保存時の認証に使用）
     const al=[];
+
+    // 産休復帰期限超過
     players.filter(p=>p.status==="maternity").forEach(p=>{
       if(p.returnDate&&new Date(p.returnDate)<=TODAY)
         al.push({type:"maternity", message:`${p.name}さんの産休復帰予定日を過ぎています。`});
     });
+
+    // 担当リスナーと年齢区分のミスマッチ
+    // ageGroup="B"（45歳以上）なのに、担当リスナーが youth 専任の場合
+    const youthOnlyListeners = new Set(
+      listeners.filter(l=>l.board==="youth").map(l=>l.id)
+    );
+    const seniorOnlyListeners = new Set(
+      listeners.filter(l=>l.board==="senior").map(l=>l.id)
+    );
+    players.filter(p=>p.status!=="maternity").forEach(p=>{
+      const listenerBoard = listeners.find(l=>l.id===p.lid)?.board;
+      if (p.ageGroup==="B" && listenerBoard==="youth") {
+        // 45歳以上なのに44歳以下専任リスナーが担当
+        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+        al.push({ type:"board_mismatch", message:`${p.name}さんは45歳以上ですが、44歳以下担当の${lName}が担当しています。45歳以上担当のリスナーへの変更を検討してください。` });
+      }
+      if (p.ageGroup==="A" && listenerBoard==="senior") {
+        // 44歳以下なのに45歳以上専任リスナーが担当
+        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+        al.push({ type:"board_mismatch", message:`${p.name}さんは44歳以下ですが、45歳以上担当の${lName}が担当しています。44歳以下担当のリスナーへの変更を検討してください。` });
+      }
+    });
+
     if(al.length>0){setAlerts(al);setShowAlerts(true);setDismissedIds([]);}
   };
 
