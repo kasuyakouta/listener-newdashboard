@@ -393,9 +393,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
         )}
       </div>
       {player.status==="maternity" && (
-        <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>
-          産休・育休　復帰予定: {formatDate(player.returnDate)}
-        </div>
+        <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>産休・育休中</div>
       )}
     </div>
   );
