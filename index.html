@@ -297,17 +297,17 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
         <div style={{ overflowY:"auto", padding:"10px 12px", display:"flex", flexDirection:"column", gap:8 }}>
           {alerts.map((a,i)=>dismissed.includes(i)?null:(
             <div key={i} style={{
-              background:a.type==="maternity"?"#EAF3FB":a.type==="board_mismatch"?"#FFF0E0":"#FFFBE6",
-              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="board_mismatch"?"#F5A623":"#FFD93D"}`,
+              background:a.type==="maternity"?"#EAF3FB":a.type==="board_mismatch"?"#FFF0E0":a.type==="career_mismatch"?"#EDF7ED":"#FFFBE6",
+              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="board_mismatch"?"#F5A623":a.type==="career_mismatch"?"#5C9E5C":"#FFD93D"}`,
               borderRadius:10, padding:"10px 14px 10px 12px", fontSize:12, position:"relative" }}>
               <button onClick={()=>onDismiss(i)}
                 style={{ position:"absolute", top:6, right:8, fontSize:14, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-tertiary)" }}>✕</button>
               <div style={{ fontWeight:600, marginBottom:4, paddingRight:20,
-                color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":"#8A6800" }}>
-                {a.type==="maternity"?"🩵 産休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":"⚠ その他通知"}
+                color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":a.type==="career_mismatch"?"#2E7D32":"#8A6800" }}>
+                {a.type==="maternity"?"🩵 産休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":"⚠ その他通知"}
               </div>
               <div style={{ color:"var(--color-text-primary)", lineHeight:1.5, marginBottom: a.type==="board_mismatch"?10:0 }}>{a.message}</div>
-              {a.type==="board_mismatch" && onApprove && a.pid && (
+              {(a.type==="board_mismatch" || a.type==="career_mismatch") && onApprove && a.pid && (
                 <div style={{ display:"flex", gap:8, marginTop:4 }}>
                   <button onClick={()=>{ onApprove(a.pid); onDismiss(i); }}
                     style={{ fontSize:12, padding:"5px 12px", borderRadius:8, border:"none",
@@ -845,7 +845,8 @@ function App() {
   const [showSearch,   setShowSearch]   = useState(false);
   const [searchQuery,  setSearchQuery]  = useState("");
   const [searchLid,    setSearchLid]    = useState(""); // リスナー絞り込み
-  const [changingLidFor, setChangingLidFor] = useState(null); // 次期切替予告でのリスナー変更対象プレイヤーID
+  const [changingLidFor,    setChangingLidFor]    = useState(null);
+  const [careerListeners,   setCareerListeners]   = useState([]); // 中途入社制限リスナーID一覧 // 次期切替予告でのリスナー変更対象プレイヤーID
   const [ageSoonPid,    setAgeSoonPid]    = useState(null); // ⚡カードのリスナー変更ダイアログ対象PID
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
@@ -880,6 +881,7 @@ function App() {
         setPlayers(data.players   || []);
         setListeners(data.listeners|| []);
         setRetired(data.retired   || []);
+        setCareerListeners(data.careerListeners || []);
         saveCache(data);
       } catch(e) { /* サイレント失敗 */ }
       return;
@@ -898,14 +900,16 @@ function App() {
       setPlayers(cached.players   || []);
       setListeners(cached.listeners|| []);
       setRetired(cached.retired   || []);
+      setCareerListeners(cached.careerListeners || []);
       setAppState("dashboard"); // キャッシュで即表示
       setLoadStep(3); setLoadMsg("バックグラウンドで最新データ取得中...");
       // バックグラウンドで最新データを取得して更新
       try {
         const fresh = await apiGet("public");
-        setPlayers(fresh.players   || []);
-        setListeners(fresh.listeners|| []);
-        setRetired(fresh.retired   || []);
+        setPlayers(fresh.players        || []);
+        setListeners(fresh.listeners    || []);
+        setRetired(fresh.retired        || []);
+        setCareerListeners(fresh.careerListeners || []);
         saveCache(fresh);
       } catch(e) { /* 失敗してもキャッシュデータを使い続ける */ }
       return;
@@ -925,6 +929,7 @@ function App() {
       setPlayers(data.players   || []);
       setListeners(data.listeners|| []);
       setRetired(data.retired   || []);
+      setCareerListeners(data.careerListeners || []);
       saveCache(data); // ② キャッシュに保存
       setAppState("dashboard");
     } catch(e) {
@@ -941,9 +946,10 @@ function App() {
       if (isAdmin) return;
       try {
         const data = await apiGet("public");
-        setPlayers(data.players   || []);
-        setListeners(data.listeners|| []);
-        setRetired(data.retired   || []);
+        setPlayers(data.players        || []);
+        setListeners(data.listeners    || []);
+        setRetired(data.retired        || []);
+        setCareerListeners(data.careerListeners || []);
         saveCache(data); // キャッシュも更新
       } catch(e) { /* サイレント失敗 */ }
     }, 7 * 60 * 1000);
@@ -1131,6 +1137,18 @@ function App() {
       if (p.ageGroup==="A" && listenerBoard==="senior") {
         const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
         al.push({ type:"board_mismatch", pid:p.id, message:`${p.name}さんは44歳以下ですが、45歳以上担当の${lName}が担当しています。` });
+      }
+    });
+
+    // 中途入社担当ルール違反チェック
+    players.filter(p => p.careerRestricted && !p.approvedMismatch).forEach(p => {
+      if (careerListeners.length > 0 && !careerListeners.includes(p.lid)) {
+        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+        al.push({
+          type: "career_mismatch",
+          pid:  p.id,
+          message: `${p.name}さんは中途入社3年未満ですが、担当制限外の${lName}が担当しています。`,
+        });
       }
     });
 
