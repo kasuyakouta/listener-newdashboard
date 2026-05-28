@@ -65,6 +65,9 @@ function loadCache() {
     if (!raw) return null;
     const { timestamp, data } = JSON.parse(raw);
     if (Date.now() - timestamp > CACHE_MAX_AGE) return null; // 30分超は破棄
+    // キャッシュバリデーション: 必須フィールドの確認
+    if (!data || !Array.isArray(data.players) || !Array.isArray(data.listeners)) return null;
+    if (data.players.length > 0 && data.players[0].ageGroup === undefined) return null; // 古いキャッシュを破棄
     return data;
   } catch(e) { return null; }
 }
@@ -1297,7 +1300,7 @@ function App() {
               style={{ fontSize:11, padding:"8px 12px", borderRadius:10, cursor:"pointer", flexShrink:0, border:"none",
                 background:freqFilter!=="all"?"#44546A":"var(--color-background-secondary)",
                 color:freqFilter!=="all"?"#fff":"var(--color-text-secondary)", fontWeight:freqFilter!=="all"?600:400 }}>
-              {freqFilter==="all"?"絞込 ▼":`${FREQ_TABS.find(t=>t.key===freqFilter)?.label} ✕`}
+              {freqFilter==="all"?"絞込 ▼":`${FREQ_TABS.find(t=>t.key===freqFilter)?.label||"絞込中"} ✕`}
             </button>
           )}
         </div>
@@ -1581,7 +1584,32 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+// ── Error Boundary ────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding:24, fontFamily:"sans-serif" }}>
+          <div style={{ fontSize:18, fontWeight:700, color:"#C00000", marginBottom:12 }}>⚠ 表示エラー</div>
+          <div style={{ fontSize:13, color:"#333", background:"#FFF0E8", borderRadius:8, padding:12, wordBreak:"break-all" }}>
+            {String(this.state.error)}
+          </div>
+          <button onClick={()=>window.location.reload()}
+            style={{ marginTop:16, padding:"8px 20px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", fontSize:14, cursor:"pointer" }}>
+            再読み込み
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <ErrorBoundary><App /></ErrorBoundary>
+);
 </script>
 </body>
 </html>
