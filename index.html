@@ -374,7 +374,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   return (
     <div onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}
-      onClick={()=>{ if(!isAdmin) return; if(!didDrag.current) onTap&&onTap(); }}
+      onClick={(e)=>{ if(!isAdmin) return; if(!didDrag.current) { e.stopPropagation(); onTap&&onTap(); } }}
       style={{ background:cs.bg, border:`${borderWidth} ${(selected||highlight)?"solid":(cs.borderStyle||"solid")} ${borderColor}`,
         borderRadius:7, padding:"5px 7px",
         cursor:isAdmin?(pressing?"grabbing":"pointer"):"default",
@@ -509,7 +509,9 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
   return (
     <div id={`listener-col-${listener.id}`} data-listener-id={listener.id}
       style={{ minWidth:88, maxWidth:88, display:"flex", flexDirection:"column", gap:3 }}
-      onClick={()=>{ if(isAdmin&&selectedPid) onMoveTo(listener.id); }}>
+      onClick={(e)=>{
+        if(isAdmin&&selectedPid) { onMoveTo(listener.id); e.stopPropagation(); }
+      }}>
       {/* リスナー列ヘッダー（管理者モードで長押しドラッグ可） */}
       <ListenerHeader
         listener={listener}
