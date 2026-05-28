@@ -495,7 +495,8 @@ function ListenerHeader({ listener, isAdmin, isHighlight, isDragTarget, isListen
 function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSelectPlayer,
   onEditPlayer, onAddPlayer, onMoveTo, highlightLid, highlightPid,
   dragOverLid, dragPid, dragOverPid, dragOverPos, onDragStart, onDragMove, onDragEnd,
-  isListenerDragging, isListenerDragOver, onListenerDragStart, onListenerDragMove, onListenerDragEnd }) {
+  isListenerDragging, isListenerDragOver, onListenerDragStart, onListenerDragMove, onListenerDragEnd,
+  ageSoonPid, onAgeSoonSelect, seniorListeners }) {
   const [showDetail, setShowDetail] = useState(false);
   const isHighlight  = highlightLid===listener.id;
   const isDragTarget = dragOverLid===listener.id;
@@ -538,10 +539,44 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
           <PlayerCard player={p} isAdmin={isAdmin}
             highlight={highlightPid===p.id} selected={selectedPid===p.id} dragging={dragPid===p.id}
             onLongPress={()=>onSelectPlayer(p.id)}
-            onTap={()=>{ if(selectedPid===p.id) onEditPlayer(p); else if(selectedPid) onMoveTo(listener.id); else onSelectPlayer(p.id); }}
+            onTap={()=>{
+              if(selectedPid===p.id) { onEditPlayer(p); return; }
+              if(selectedPid) { onMoveTo(listener.id); return; }
+              // ⚡カード（ageSoon）を管理者モードでタップ → リスナー変更ダイアログ
+              if(isAdmin && p.ageSoon && onAgeSoonSelect) { onAgeSoonSelect(p.id); return; }
+              onSelectPlayer(p.id);
+            }}
             onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} />
           {dragOverPid===p.id&&dragOverPos==="after"&&(
             <div style={{ position:"absolute", bottom:-2, left:0, right:0, height:3, background:"#00CFFF", borderRadius:2, zIndex:10 }} />
+          )}
+          {/* ⚡ ageSoon リスナー変更ダイアログ */}
+          {isAdmin && ageSoonPid===p.id && p.ageSoon && (
+            <div style={{ position:"absolute", top:"100%", left:0, right:0, zIndex:50,
+              background:"var(--color-background-primary)", border:"1.5px solid #FFD54F",
+              borderRadius:10, padding:"10px 12px", marginTop:4,
+              boxShadow:"0 4px 16px rgba(0,0,0,0.18)" }}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{ fontSize:11, color:"#B8860B", fontWeight:600, marginBottom:8 }}>
+                45歳以上担当へ変更：
+              </div>
+              {(seniorListeners||[]).map(l=>(
+                <button key={l.id}
+                  onClick={e=>{ e.stopPropagation(); onMoveTo(l.id, p.id); onAgeSoonSelect(null); }}
+                  style={{ display:"flex", alignItems:"center", gap:8, width:"100%",
+                    padding:"7px 10px", borderRadius:8, border:`1.5px solid ${l.color}`,
+                    background: p.lid===l.id ? l.bg : "var(--color-background-primary)",
+                    cursor:"pointer", marginBottom:5, textAlign:"left" }}>
+                  <span style={{ width:9, height:9, borderRadius:"50%", background:l.bg, border:`2px solid ${l.color}`, flexShrink:0 }} />
+                  <span style={{ fontSize:12, color:l.color, fontWeight:p.lid===l.id?700:400, flex:1 }}>{l.name}</span>
+                  {p.lid===l.id&&<span style={{ fontSize:10, color:l.color }}>現在</span>}
+                </button>
+              ))}
+              <button onClick={e=>{ e.stopPropagation(); onAgeSoonSelect(null); }}
+                style={{ width:"100%", padding:"6px", borderRadius:8, border:"none",
+                  background:"var(--color-background-secondary)", color:"var(--color-text-secondary)",
+                  fontSize:11, cursor:"pointer", marginTop:2 }}>キャンセル</button>
+            </div>
           )}
         </div>
       ))}
@@ -809,6 +844,7 @@ function App() {
   const [searchQuery,  setSearchQuery]  = useState("");
   const [searchLid,    setSearchLid]    = useState(""); // リスナー絞り込み
   const [changingLidFor, setChangingLidFor] = useState(null); // 次期切替予告でのリスナー変更対象プレイヤーID
+  const [ageSoonPid,    setAgeSoonPid]    = useState(null); // ⚡カードのリスナー変更ダイアログ対象PID
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
   const [dismissedIds, setDismissedIds] = useState([]);
@@ -1003,6 +1039,8 @@ function App() {
     if(isAdmin) triggerSave(arr);
   };
   const moveSelectedTo = (lid) => { if(!selectedPid) return; movePlayerTo(selectedPid,lid); setSelectedPid(null); };
+  // ⚡ageSoonダイアログからの移動（特定のpidを指定）
+  const moveSpecificTo = (lid, pid) => { if(!pid||!lid) return; movePlayerTo(pid, lid); };
 
   // ── リスナー列並び替え ────────────────────────────────
   const [listenerDragId,  setListenerDragId]  = useState(null);
@@ -1239,7 +1277,7 @@ function App() {
     <div style={{ fontFamily:"var(--font-sans,sans-serif)", padding:0,
       outline:isAdmin?"3px solid #E53935":"none", outlineOffset:-3,
       minHeight:"100vh", boxSizing:"border-box" }}
-      onClick={()=>{if(selectedPid)setSelectedPid(null);}}>
+      onClick={()=>{ if(selectedPid) setSelectedPid(null); if(ageSoonPid) setAgeSoonPid(null); }}>
 
       {/* ヘッダー */}
       <div style={{ background:isAdmin?"#FFF5F5":"var(--color-background-primary)",
@@ -1303,7 +1341,7 @@ function App() {
         <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
           <div style={{ display:"flex", flex:1, background:"var(--color-background-secondary)", borderRadius:12, padding:3, gap:3 }}>
             {BOARD_TABS.map(t=>(
-              <button key={t.key} onClick={()=>{setBoardTab(t.key);setFreqFilter("all");setShowFreqFilter(false);setSelectedPid(null);}}
+              <button key={t.key} onClick={()=>{setBoardTab(t.key);setFreqFilter("all");setShowFreqFilter(false);setSelectedPid(null);setChangingLidFor(null);setAgeSoonPid(null);}}
                 style={{ flex:1, fontSize:13, padding:"8px 4px", cursor:"pointer", border:"none", borderRadius:10,
                   background:boardTab===t.key?(isAdmin?"#E53935":"#185FA5"):"transparent",
                   color:boardTab===t.key?"#fff":"var(--color-text-secondary)",
@@ -1504,7 +1542,7 @@ function App() {
                 isAdmin={isAdmin} selectedPid={selectedPid}
                 onSelectPlayer={pid=>setSelectedPid(prev=>prev===pid?null:pid)}
                 onEditPlayer={p=>setEditPlayer(p)} onAddPlayer={lid=>setAddForLid(lid)}
-                onMoveTo={moveSelectedTo} highlightLid={highlightLid} highlightPid={highlightPid}
+                onMoveTo={(lid, pid)=>pid ? moveSpecificTo(lid, pid) : moveSelectedTo(lid)} highlightLid={highlightLid} highlightPid={highlightPid}
                 dragOverLid={dragOverLid} dragPid={dragPid} dragOverPid={dragOverPid} dragOverPos={dragOverPos}
                 onDragStart={handleDragStart} onDragMove={handleDragMove} onDragEnd={handleDragEnd}
                 isListenerDragging={listenerDragId===l.id}
@@ -1512,6 +1550,9 @@ function App() {
                 onListenerDragStart={handleListenerDragStart}
                 onListenerDragMove={handleListenerDragMove}
                 onListenerDragEnd={handleListenerDragEnd}
+                ageSoonPid={ageSoonPid}
+                onAgeSoonSelect={pid=>setAgeSoonPid(prev=>prev===pid?null:pid)}
+                seniorListeners={listeners.filter(l=>l.board==="senior"||l.board==="both")}
               />
             );
           })}
