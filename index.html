@@ -981,7 +981,17 @@ function App() {
 
   // ── プレイヤー操作 ────────────────────────────────────
   const updatePlayer = (id, data) => {
-    const next = players.map(p=>p.id===id?{...p,...data}:p);
+    let next = players.map(p=>p.id===id?{...p,...data}:p);
+    // status が maternity に変更された場合、同じ列の一番下に移動
+    if (data.status === "maternity") {
+      const target = next.find(p=>p.id===id);
+      if (target) {
+        next = next.filter(p=>p.id!==id);
+        // 同じ lid の最後尾に挿入
+        const lastIdx = next.reduce((acc, p, i) => p.lid===target.lid ? i : acc, -1);
+        next.splice(lastIdx + 1, 0, target);
+      }
+    }
     setPlayers(next);
     if (isAdmin) triggerSave(next);
   };
