@@ -37,8 +37,6 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbxFC4C64yrWx-vKq7cyV_kx
 
 // ── 定数 ──────────────────────────────────────────────────
 const TODAY      = new Date();
-const LOAD_WARN  = 80;
-const PREV_START = new Date("2026-06-01");
 const PREV_DAYS  = 60;
 const PREV_LID_START_DATE = new Date("2026-06-01"); // 前任記録開始日
 
@@ -778,11 +776,9 @@ function App() {
   const [boardTab,     setBoardTab]     = useState("youth");
   const [freqFilter,   setFreqFilter]   = useState("all");
   const [showFreqFilter,setShowFreqFilter] = useState(false);
-  const [showBreakdown,setShowBreakdown] = useState(false);
   const [isAdmin,      setIsAdmin]      = useState(false);
   const [showAdminPin, setShowAdminPin] = useState(false);
   const [showHistory,  setShowHistory]  = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [editPlayer,   setEditPlayer]   = useState(null);
   const [addForLid,    setAddForLid]    = useState(null);
   const [selectedPid,  setSelectedPid]  = useState(null);
@@ -796,6 +792,7 @@ function App() {
   const [showSearch,   setShowSearch]   = useState(false);
   const [searchQuery,  setSearchQuery]  = useState("");
   const [searchLid,    setSearchLid]    = useState(""); // リスナー絞り込み
+  const [changingLidFor, setChangingLidFor] = useState(null); // 次期切替予告でのリスナー変更対象プレイヤーID
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
   const [dismissedIds, setDismissedIds] = useState([]);
@@ -818,22 +815,6 @@ function App() {
       await apiPost(currentPin, "saveChangeLog", { logs });
     } catch(e) { console.error("ChangeLog保存エラー:", e); }
   }, []);
-
-  // ── ログイン & データ取得 ─────────────────────────────
-  const handleLogin = async (enteredPin) => {
-    setAppState("loading");
-    try {
-      const data = await apiGet(enteredPin);
-      setPin(enteredPin);
-      setPlayers(data.players   || []);
-      setListeners(data.listeners|| []);
-      setRetired(data.retired   || []);
-      setAppState("dashboard");
-    } catch(e) {
-      setLoadError(e.message);
-      setAppState("error");
-    }
-  };
 
   // 初回データ読み込み（ウォームアップ + キャッシュ即時表示 + ステップ表示）
   const loadData = useCallback(async (silent=false) => {
@@ -956,7 +937,7 @@ function App() {
   };
   const restoreRetired = (rid) => {
     const r = retired.find(x=>x.id===rid); if(!r) return;
-    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", joinType:"newgrad", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"" }];
+    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"" }];
     const nextRet = retired.filter(x=>x.id!==rid);
     setPlayers(nextPl); setRetired(nextRet);
     if (isAdmin) triggerSave(nextPl, nextRet);
@@ -1002,15 +983,12 @@ function App() {
 
   // ── リスナー列並び替え ────────────────────────────────
   const [listenerDragId,  setListenerDragId]  = useState(null);
-  const [listenerDragPos, setListenerDragPos] = useState({x:0,y:0});
   const [listenerOverId,  setListenerOverId]  = useState(null);
 
   const handleListenerDragStart = (lid, x, y) => {
     setListenerDragId(lid);
-    setListenerDragPos({x, y});
   };
   const handleListenerDragMove = (x, y) => {
-    setListenerDragPos({x, y});
     const els = document.elementsFromPoint(x, y);
     const colEl = els.find(el => el?.getAttribute?.("data-listener-id"));
     const overId = colEl ? colEl.getAttribute("data-listener-id") : null;
@@ -1081,12 +1059,6 @@ function App() {
 
     // 担当リスナーと年齢区分のミスマッチ
     // ageGroup="B"（45歳以上）なのに、担当リスナーが youth 専任の場合
-    const youthOnlyListeners = new Set(
-      listeners.filter(l=>l.board==="youth").map(l=>l.id)
-    );
-    const seniorOnlyListeners = new Set(
-      listeners.filter(l=>l.board==="senior").map(l=>l.id)
-    );
     players.filter(p=>p.status!=="maternity").forEach(p=>{
       const listenerBoard = listeners.find(l=>l.id===p.lid)?.board;
       if (p.ageGroup==="B" && listenerBoard==="youth") {
@@ -1116,7 +1088,7 @@ function App() {
   const handleSearchSelect = (p) => {
     setBoardTab(p.ageGroup==="B"?"senior":"youth");
     setHighlightLid(p.lid); setHighlightPid(p.id);
-    setSearchQuery(""); setShowSearch(false);
+    setSearchQuery(""); setSearchLid(""); setShowSearch(false);
     setTimeout(()=>{
       document.getElementById(`listener-col-${p.lid}`)?.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});
       document.getElementById(`player-card-${p.id}`)?.scrollIntoView({behavior:"smooth",block:"center",inline:"nearest"});
@@ -1148,7 +1120,6 @@ function App() {
   const FREQ_TABS  = [{key:"all",label:"全員"},{key:"new",label:"新人（2週/1回）"},{key:"normal",label:"通常（2ヶ月以上）"}];
 
   // ── 画面分岐 ─────────────────────────────────────────
-  if (appState==="init") return <LoadingScreen message="起動中..." />;
   if (appState==="loading") return <LoadingScreen message={loadMsg} step={loadStep} total={3} />;
   if (appState==="error")   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"100vh", padding:24, gap:16 }}>
@@ -1175,15 +1146,7 @@ function App() {
     <HistoryPage retired={retired} listeners={listeners}
       onRestore={restoreRetired} onDelete={deleteRetired} onClose={()=>setShowHistory(false)} isAdmin={isAdmin} />
   );
-  if (showSettings) return (
-    <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column", minHeight:"100vh" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)" }}>
-        <button onClick={()=>setShowSettings(false)} style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none", background:"var(--color-background-secondary)", color:"var(--color-text-secondary)", cursor:"pointer" }}>← 戻る</button>
-        <span style={{ fontSize:15, fontWeight:600 }}>設定</span>
-      </div>
-      <SettingsTab pin={pin} onChangePass={p=>setPin(p)} />
-    </div>
-  );
+
   if (showSearch) {
     const keyword = searchQuery.trim();
     return (
@@ -1409,35 +1372,80 @@ function App() {
           {/* ⑦ 次期切替予告一覧 */}
           {(()=>{
             const today = new Date();
-            // 次の期開始日を求める
-            const nm = today.getMonth(); // 0-11
+            const nm = today.getMonth();
             const nextPeriod = nm < 6
-              ? new Date(today.getFullYear(), 6, 1)   // 7/1
-              : new Date(today.getFullYear()+1, 0, 1); // 翌1/1
+              ? new Date(today.getFullYear(), 6, 1)
+              : new Date(today.getFullYear()+1, 0, 1);
             const nextLabel = nm < 6 ? `${today.getFullYear()}年7月1日（後期）` : `${today.getFullYear()+1}年1月1日（前期）`;
 
-            // new→normal 切替予定（statusSoonで判定）
             const normalSwitch = players.filter(p=>p.statusSoon===true);
-            // 45歳→区分B切替予定
-            const ageSwitch = players.filter(p=>p.ageSoon===true && p.ageGroup==="A");
+            const ageSwitch    = players.filter(p=>p.ageSoon===true && p.ageGroup==="A");
 
             if (normalSwitch.length===0 && ageSwitch.length===0) return null;
+
+            // 45歳以上担当リスナー（board="senior" or "both"）
+            const seniorListeners = listeners.filter(l=>l.board==="senior"||l.board==="both");
+
             return (
               <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
                 <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>📅 次期切替予告</div>
-                <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:12 }}>次の期開始日：{nextLabel}</div>
+                <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:12 }}>
+                  次の期開始日：{nextLabel}
+                  {isAdmin && <span style={{ marginLeft:8, fontSize:10, color:"#185FA5" }}>タップで担当変更</span>}
+                </div>
+
+                {/* 区分A→B切替予定 */}
                 {ageSwitch.length>0&&(
                   <div style={{ marginBottom:12 }}>
                     <div style={{ fontSize:12, fontWeight:600, color:"#B8860B", marginBottom:6 }}>🔶 区分A→B（45歳以上へ）{ageSwitch.length}名</div>
-                    {ageSwitch.map(p=>(
-                      <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#FFFDE7", borderRadius:8, marginBottom:4 }}>
-                        <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
-                        <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
-                        <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>切替予定</span>
-                      </div>
-                    ))}
+                    {ageSwitch.map(p=>{
+                      const currentL = listeners.find(l=>l.id===p.lid);
+                      return (
+                        <div key={p.id}
+                          onClick={()=>{ if(isAdmin) setChangingLidFor(prev=>prev===p.id?null:p.id); }}
+                          style={{ padding:"8px 10px", background:"#FFFDE7", borderRadius:8, marginBottom:4,
+                            cursor:isAdmin?"pointer":"default",
+                            border: changingLidFor===p.id ? "2px solid #185FA5" : "1px solid transparent",
+                            transition:"border 0.15s" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                            <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{currentL?.name||"—"}</span>
+                            <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>切替予定</span>
+                            {isAdmin && <span style={{ fontSize:11, color:"#185FA5" }}>›</span>}
+                          </div>
+                          {/* リスナー選択パネル */}
+                          {isAdmin && changingLidFor===p.id && (
+                            <div style={{ marginTop:10, paddingTop:10, borderTop:"1px solid #FFD54F" }}>
+                              <div style={{ fontSize:11, color:"#B8860B", fontWeight:600, marginBottom:8 }}>
+                                45歳以上担当リスナーを選択：
+                              </div>
+                              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                                {seniorListeners.map(l=>(
+                                  <button key={l.id}
+                                    onClick={e=>{ e.stopPropagation(); movePlayerTo(p.id, l.id); setChangingLidFor(null); }}
+                                    style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px",
+                                      borderRadius:8, border:`1.5px solid ${l.color}`,
+                                      background: p.lid===l.id ? l.bg : "var(--color-background-primary)",
+                                      cursor:"pointer", textAlign:"left" }}>
+                                    <span style={{ width:10, height:10, borderRadius:"50%", background:l.bg, border:`2px solid ${l.color}`, flexShrink:0 }} />
+                                    <span style={{ fontSize:13, fontWeight: p.lid===l.id?700:400, color:l.color, flex:1 }}>{l.name}</span>
+                                    {p.lid===l.id && <span style={{ fontSize:10, color:l.color }}>現在</span>}
+                                  </button>
+                                ))}
+                              </div>
+                              <button onClick={e=>{ e.stopPropagation(); setChangingLidFor(null); }}
+                                style={{ width:"100%", marginTop:8, padding:"7px", borderRadius:8, border:"none",
+                                  background:"var(--color-background-secondary)", color:"var(--color-text-secondary)",
+                                  fontSize:12, cursor:"pointer" }}>キャンセル</button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
+
+                {/* 新人→通常切替予定 */}
                 {normalSwitch.length>0&&(
                   <div>
                     <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 新人→通常（GAS判定）{normalSwitch.length}名</div>
