@@ -280,7 +280,7 @@ function SettingsTab({ pin, onChangePass }) {
 }
 
 // ── AlertPanel ────────────────────────────────────────────
-function AlertPanel({ alerts, dismissed, onDismiss, onClose }) {
+function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
   const visible = alerts.filter((_,i)=>!dismissed.includes(i));
   if (visible.length===0) { onClose(); return null; }
   return (
@@ -306,7 +306,19 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose }) {
                 color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":"#8A6800" }}>
                 {a.type==="maternity"?"🩵 産休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":"⚠ その他通知"}
               </div>
-              <div style={{ color:"var(--color-text-primary)", lineHeight:1.5 }}>{a.message}</div>
+              <div style={{ color:"var(--color-text-primary)", lineHeight:1.5, marginBottom: a.type==="board_mismatch"?10:0 }}>{a.message}</div>
+              {a.type==="board_mismatch" && onApprove && a.pid && (
+                <div style={{ display:"flex", gap:8, marginTop:4 }}>
+                  <button onClick={()=>{ onApprove(a.pid); onDismiss(i); }}
+                    style={{ fontSize:12, padding:"5px 12px", borderRadius:8, border:"none",
+                      background:"#639922", color:"#fff", cursor:"pointer", fontWeight:600 }}>
+                    ✓ このまま承認
+                  </button>
+                  <span style={{ fontSize:11, color:"var(--color-text-tertiary)", alignSelf:"center" }}>
+                    次回から表示しない
+                  </span>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -941,7 +953,7 @@ function App() {
   };
   const restoreRetired = (rid) => {
     const r = retired.find(x=>x.id===rid); if(!r) return;
-    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"" }];
+    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"", approvedMismatch:false }];
     const nextRet = retired.filter(x=>x.id!==rid);
     setPlayers(nextPl); setRetired(nextRet);
     if (isAdmin) triggerSave(nextPl, nextRet);
@@ -973,6 +985,13 @@ function App() {
     setPlayers(next);
     if(isAdmin) triggerSave(next);
   };
+  // ミスマッチを承認済みにして保存
+  const approveMismatch = (pid) => {
+    const next = players.map(p => p.id===pid ? {...p, approvedMismatch:true} : p);
+    setPlayers(next);
+    triggerSave(next);
+  };
+
   const reorderPlayer = (pid, targetPid, pos) => {
     const arr=[...players];
     const si=arr.findIndex(p=>p.id===pid), ti=arr.findIndex(p=>p.id===targetPid);
@@ -1063,17 +1082,15 @@ function App() {
 
     // 担当リスナーと年齢区分のミスマッチ
     // ageGroup="B"（45歳以上）なのに、担当リスナーが youth 専任の場合
-    players.filter(p=>p.status!=="maternity").forEach(p=>{
+    players.filter(p=>p.status!=="maternity" && !p.approvedMismatch).forEach(p=>{
       const listenerBoard = listeners.find(l=>l.id===p.lid)?.board;
       if (p.ageGroup==="B" && listenerBoard==="youth") {
-        // 45歳以上なのに44歳以下専任リスナーが担当
         const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
-        al.push({ type:"board_mismatch", message:`${p.name}さんは45歳以上ですが、44歳以下担当の${lName}が担当しています。45歳以上担当のリスナーへの変更を検討してください。` });
+        al.push({ type:"board_mismatch", pid:p.id, message:`${p.name}さんは45歳以上ですが、44歳以下担当の${lName}が担当しています。` });
       }
       if (p.ageGroup==="A" && listenerBoard==="senior") {
-        // 44歳以下なのに45歳以上専任リスナーが担当
         const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
-        al.push({ type:"board_mismatch", message:`${p.name}さんは44歳以下ですが、45歳以上担当の${lName}が担当しています。44歳以下担当のリスナーへの変更を検討してください。` });
+        al.push({ type:"board_mismatch", pid:p.id, message:`${p.name}さんは44歳以下ですが、45歳以上担当の${lName}が担当しています。` });
       }
     });
 
@@ -1579,7 +1596,8 @@ function App() {
       {/* アラート */}
       {isAdmin&&showAlerts&&(
         <AlertPanel alerts={alerts} dismissed={dismissedIds}
-          onDismiss={i=>setDismissedIds(prev=>[...prev,i])} onClose={()=>setShowAlerts(false)} />
+          onDismiss={i=>setDismissedIds(prev=>[...prev,i])} onClose={()=>setShowAlerts(false)}
+          onApprove={approveMismatch} />
       )}
     </div>
   );
