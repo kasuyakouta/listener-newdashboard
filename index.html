@@ -848,7 +848,11 @@ function App() {
   const [searchQuery,  setSearchQuery]  = useState("");
   const [searchLid,    setSearchLid]    = useState(""); // リスナー絞り込み
   const [changingLidFor,    setChangingLidFor]    = useState(null);
-  const [careerListeners,   setCareerListeners]   = useState([]); // 中途入社制限リスナーID一覧 // 次期切替予告でのリスナー変更対象プレイヤーID
+  const [careerListeners,   setCareerListeners]   = useState([]); // 中途入社制限リスナーID一覧
+  const [adminNotes,        setAdminNotes]        = useState("");  // 管理者備考
+  const [notesEditMode,     setNotesEditMode]     = useState(false); // 備考編集中
+  const [notesDraft,        setNotesDraft]        = useState("");  // 編集中テキスト
+  const [notesSaving,       setNotesSaving]       = useState(false); // 次期切替予告でのリスナー変更対象プレイヤーID
   const [ageSoonPid,    setAgeSoonPid]    = useState(null); // ⚡カードのリスナー変更ダイアログ対象PID
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
@@ -884,6 +888,7 @@ function App() {
         setListeners(data.listeners|| []);
         setRetired(data.retired   || []);
         setCareerListeners(data.careerListeners || []);
+        setAdminNotes(data.notes || "");
         saveCache(data);
       } catch(e) { /* サイレント失敗 */ }
       return;
@@ -903,6 +908,7 @@ function App() {
       setListeners(cached.listeners|| []);
       setRetired(cached.retired   || []);
       setCareerListeners(cached.careerListeners || []);
+        setAdminNotes(data.notes || "");
       setAppState("dashboard"); // キャッシュで即表示
       setLoadStep(3); setLoadMsg("バックグラウンドで最新データ取得中...");
       // バックグラウンドで最新データを取得して更新
@@ -912,6 +918,7 @@ function App() {
         setListeners(fresh.listeners    || []);
         setRetired(fresh.retired        || []);
         setCareerListeners(fresh.careerListeners || []);
+        setAdminNotes(data.notes || "");
         saveCache(fresh);
       } catch(e) { /* 失敗してもキャッシュデータを使い続ける */ }
       return;
@@ -932,6 +939,7 @@ function App() {
       setListeners(data.listeners|| []);
       setRetired(data.retired   || []);
       setCareerListeners(data.careerListeners || []);
+        setAdminNotes(data.notes || "");
       saveCache(data); // ② キャッシュに保存
       setAppState("dashboard");
     } catch(e) {
@@ -952,6 +960,7 @@ function App() {
         setListeners(data.listeners    || []);
         setRetired(data.retired        || []);
         setCareerListeners(data.careerListeners || []);
+        setAdminNotes(data.notes || "");
         saveCache(data); // キャッシュも更新
       } catch(e) { /* サイレント失敗 */ }
     }, 7 * 60 * 1000);
@@ -1563,6 +1572,63 @@ function App() {
               </div>
             );
           })()}
+
+          {/* 📝 備考・特記事項（管理者のみ） */}
+          {isAdmin&&(
+            <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                <div style={{ fontSize:13, fontWeight:600 }}>📝 備考・特記事項</div>
+                {!notesEditMode&&(
+                  <button onClick={()=>{ setNotesDraft(adminNotes); setNotesEditMode(true); }}
+                    style={{ fontSize:12, padding:"4px 12px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)",
+                      background:"var(--color-background-primary)", cursor:"pointer", color:"#185FA5" }}>
+                    ✏ 編集
+                  </button>
+                )}
+              </div>
+              {notesEditMode?(
+                <div>
+                  <textarea value={notesDraft} onChange={e=>setNotesDraft(e.target.value)}
+                    placeholder="面談ルール・特記事項を入力..."
+                    style={{ width:"100%", minHeight:160, fontSize:13, padding:"10px 12px",
+                      borderRadius:10, border:"1.5px solid #185FA5", resize:"vertical",
+                      fontFamily:"inherit", color:"var(--color-text-primary)",
+                      background:"var(--color-background-primary)", boxSizing:"border-box",
+                      lineHeight:1.6, outline:"none" }} />
+                  <div style={{ display:"flex", gap:10, marginTop:8 }}>
+                    <button onClick={async ()=>{
+                      setNotesSaving(true);
+                      try {
+                        await apiPost(pin, "saveNotes", { notes: notesDraft });
+                        setAdminNotes(notesDraft);
+                        setNotesEditMode(false);
+                      } catch(e) { alert("保存エラー: " + e.message); }
+                      finally { setNotesSaving(false); }
+                    }}
+                      disabled={notesSaving}
+                      style={{ flex:1, fontSize:14, padding:11, borderRadius:10, border:"none",
+                        background: notesSaving ? "#B0C4DE" : "#185FA5",
+                        color:"#fff", cursor: notesSaving ? "default" : "pointer", fontWeight:600 }}>
+                      {notesSaving ? "保存中..." : "保存する"}
+                    </button>
+                    <button onClick={()=>setNotesEditMode(false)}
+                      style={{ flex:1, fontSize:14, padding:11, borderRadius:10,
+                        border:"0.5px solid var(--color-border-secondary)",
+                        background:"none", cursor:"pointer", color:"var(--color-text-secondary)" }}>
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              ):(
+                <div style={{ background:"var(--color-background-secondary)", borderRadius:10,
+                  padding:"12px 14px", fontSize:13, color:"var(--color-text-primary)",
+                  lineHeight:1.7, minHeight:60, whiteSpace:"pre-wrap",
+                  color: adminNotes ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>
+                  {adminNotes || "（まだ記録がありません）"}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* パスワード変更（管理者のみ） */}
           {isAdmin&&(
