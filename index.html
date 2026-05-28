@@ -304,7 +304,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
                 style={{ position:"absolute", top:6, right:8, fontSize:14, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-tertiary)" }}>✕</button>
               <div style={{ fontWeight:600, marginBottom:4, paddingRight:20,
                 color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":a.type==="career_mismatch"?"#2E7D32":"#8A6800" }}>
-                {a.type==="maternity"?"🩵 産休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":"⚠ その他通知"}
+                {a.type==="maternity"?"🩵 産休・育休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":"⚠ その他通知"}
               </div>
               <div style={{ color:"var(--color-text-primary)", lineHeight:1.5, marginBottom: a.type==="board_mismatch"?10:0 }}>{a.message}</div>
               {(a.type==="board_mismatch" || a.type==="career_mismatch") && onApprove && a.pid && (
@@ -394,7 +394,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
       </div>
       {player.status==="maternity" && (
         <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>
-          産休　復帰予定: {formatDate(player.returnDate)}
+          産休・育休　復帰予定: {formatDate(player.returnDate)}
         </div>
       )}
     </div>
@@ -617,7 +617,7 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
     border:"0.5px solid var(--color-border-secondary)",
     background:"var(--color-background-primary)", color:"var(--color-text-primary)",
     width:"100%", boxSizing:"border-box" };
-  const STATUS_OPTS = [["normal","通常"],["new","新人"],["maternity","産休"]];
+  const STATUS_OPTS = [["normal","通常"],["new","新人"],["maternity","産休・育休"]];
 
   return (
     <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column",
@@ -1120,10 +1120,10 @@ function App() {
     setPin(adminPin); // ← PINを保存（保存時の認証に使用）
     const al=[];
 
-    // 産休復帰期限超過
+    // 産休・育休復帰期限超過
     players.filter(p=>p.status==="maternity").forEach(p=>{
       if(p.returnDate&&new Date(p.returnDate)<=TODAY)
-        al.push({type:"maternity", message:`${p.name}さんの産休復帰予定日を過ぎています。`});
+        al.push({type:"maternity", message:`${p.name}さんの産休・育休復帰予定日を過ぎています。`});
     });
 
     // 担当リスナーと年齢区分のミスマッチ
@@ -1430,7 +1430,7 @@ function App() {
               <div style={{ fontSize:10, color:"var(--color-text-tertiary)", marginTop:3 }}>実人数</div>
             </div>
             <div style={{ background:matCount>0?"#F9F6FD":"var(--color-background-secondary)", borderRadius:12, padding:"12px 14px", border:matCount>0?"1px solid #C9B8E8":"none" }}>
-              <div style={{ fontSize:11, color:matCount>0?"#7B5EA7":"var(--color-text-secondary)", marginBottom:4 }}>産休中</div>
+              <div style={{ fontSize:11, color:matCount>0?"#7B5EA7":"var(--color-text-secondary)", marginBottom:4 }}>産休・育休中</div>
               <div style={{ fontSize:28, fontWeight:700, color:matCount>0?"#7B5EA7":"var(--color-text-primary)" }}>{matCount}名</div>
             </div>
           </div>
@@ -1563,11 +1563,15 @@ function App() {
       ):(
         <div style={{ display:"flex", gap:4, overflowX:"auto", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
           {boardListeners.map(l=>{
+            // 通常プレイヤー（産休・育休以外）＋頻度フィルター適用
             let shown=boardPlayers.filter(p=>p.lid===l.id);
             if(freqFilter==="new")        shown=shown.filter(p=>p.status==="new"&&!p.statusSoon);
             if(freqFilter==="statusSoon") shown=shown.filter(p=>p.statusSoon===true);
             if(freqFilter==="ageSoon")    shown=shown.filter(p=>p.ageSoon===true);
             if(freqFilter==="normal")     shown=shown.filter(p=>p.status!=="new"&&!p.ageSoon);
+            // 産休・育休プレイヤーは頻度フィルターに関わらず常に表示
+            const maternityShown = players.filter(p=>p.status==="maternity" && p.lid===l.id);
+            shown = [...shown, ...maternityShown];
             return (
               <ListenerColumn key={l.id+"_"+boardTab} listener={l} players={shown} maxLoad={maxLoad}
                 isAdmin={isAdmin} selectedPid={selectedPid}
@@ -1617,7 +1621,7 @@ function App() {
           { key:"statusSoon", bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed", label:"2週/1回→切替予定",  filter:"statusSoon" },
           { key:"normal",     bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid",  label:"2ヶ月/1回（通常）",  filter:"normal"     },
           { key:"ageSoon",    bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted", label:"2ヶ月/1回→切替予定", filter:"ageSoon"    },
-          { key:"maternity",  bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid",  label:"産休",              filter:null         },
+          { key:"maternity",  bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid",  label:"産休・育休",              filter:null         },
         ];
         const seniorLegend = [
           { key:"senior", bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid", label:"4ヶ月/1回（通常）", filter:null },
