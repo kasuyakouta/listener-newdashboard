@@ -1162,10 +1162,21 @@ function App() {
     boardTab==="youth"  ? l.board==="youth" ||l.board==="both" :
     boardTab==="senior" ? l.board==="senior"||l.board==="both" : false
   );
-  const boardPlayers   = players.filter(p=>p.status!=="maternity").filter(p=>
-    boardTab==="youth"  ? p.ageGroup==="A" :
-    boardTab==="senior" ? p.ageGroup==="B" : true
-  );
+  const boardPlayers = players.filter(p=>p.status!=="maternity").filter(p=>{
+    const listenerBoard = listeners.find(l=>l.id===p.lid)?.board || "youth";
+    const onSenior = listenerBoard==="senior" || listenerBoard==="both";
+    const onYouth  = listenerBoard==="youth"  || listenerBoard==="both";
+    if (boardTab==="youth") {
+      // 44歳以下：ageGroup=A かつ youthリスナー担当
+      // ageSoonでseniorリスナーに先行移動済みの場合は除外（seniorタブに表示）
+      return p.ageGroup==="A" && (onYouth || (!p.ageSoon && onSenior));
+    }
+    if (boardTab==="senior") {
+      // 45歳以上：ageGroup=B、またはageSoonで先行seniorリスナーに移動済み
+      return p.ageGroup==="B" || (p.ageGroup==="A" && p.ageSoon && onSenior);
+    }
+    return true;
+  });
   const loads   = boardListeners.map(l=>boardPlayers.filter(p=>p.lid===l.id).reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon).freq,0));
   const maxLoad = Math.max(...loads,1);
 
