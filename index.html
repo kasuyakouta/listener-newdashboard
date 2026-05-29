@@ -399,7 +399,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1, minWidth:0 }}>
           {player.name}
         </span>
-        {((player.ageSoon && player.status!=="new" && player.ageGroup!=="B") || player.statusSoon) && (
+        {(player.ageSoon && player.status!=="new" && player.ageGroup!=="B") && (
           <span style={{ fontSize:8, flexShrink:0, lineHeight:1 }} title="次期切替予定">⚡</span>
         )}
       </div>
