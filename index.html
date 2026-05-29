@@ -104,10 +104,15 @@ async function apiPost(pin, action, payload = {}) {
 // ── 面談頻度 ──────────────────────────────────────────────
 // ageGroup: "A"=44歳以下, "B"=45歳以上
 function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
+  // status="new" は ageGroup より完全に優先（3年未満は年齢に関わらず面談頻度が変わらない）
   if (status === "new" && statusSoon)
-    return { freq:24, label:"2週/1回→切替予定", bg:"#FFEDE0", color:"#C0501A" }; // サーモン
+    return { freq:24, label:"2週/1回→切替予定", bg:"#FFEDE0", color:"#C0501A" }; // 新卒・切替予定
   if (status === "new" && joinType !== "career")
-    return { freq:24, label:"2週/1回（新人）",   bg:"#FAECE7", color:"#993C1D" };
+    return { freq:24, label:"2週/1回（新人）",   bg:"#FAECE7", color:"#993C1D" }; // 新卒
+  if (status === "new")
+    // 中途入社3年未満：45歳以上でも2ヶ月/1回のまま
+    return { freq:6,  label:"2ヶ月/1回（新人）", bg:"#EAF3DE", color:"#3B6D11" };
+  // 以下は status="normal" のみ
   if (ageGroup === "B")
     return { freq:3,  label:"4ヶ月/1回（通常）", bg:"#E6F1FB", color:"#185FA5" };
   if (ageSoon)
@@ -117,9 +122,11 @@ function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
 
 // borderStyle: "solid"=通常, "dashed"=新人切替予定(大破線), "dotted"=44歳切替予定(細点線)
 function freqCardStyle(status, ageGroup, joinType, ageSoon, statusSoon) {
+  // status="new" は ageGroup より完全に優先（3年未満は年齢に関わらずカード色が変わらない）
   if (status === "maternity")                    return { bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid" };
-  if (status === "new" && statusSoon)            return { bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed" }; // 大破線
-  if (status === "new" && joinType !== "career") return { bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid" };
+  if (status === "new" && statusSoon)            return { bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed" }; // 新卒→切替予定
+  if (status === "new")                          return { bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid" }; // 3年未満（newgrad/career共通）
+  // 以下は status="normal" のみ
   if (ageGroup === "B")                          return { bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid" };
   if (ageSoon)                                   return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" }; // 細点線
   return                                                { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid" };
@@ -392,7 +399,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1, minWidth:0 }}>
           {player.name}
         </span>
-        {(player.ageSoon || player.statusSoon) && (
+        {((player.ageSoon && player.status!=="new" && player.ageGroup!=="B") || player.statusSoon) && (
           <span style={{ fontSize:8, flexShrink:0, lineHeight:1 }} title="次期切替予定">⚡</span>
         )}
       </div>
@@ -1205,14 +1212,16 @@ function App() {
     const listenerBoard = listeners.find(l=>l.id===p.lid)?.board || "youth";
     const onSenior = listenerBoard==="senior" || listenerBoard==="both";
     const onYouth  = listenerBoard==="youth"  || listenerBoard==="both";
+    // status="new" は ageGroup に関わらず youth 扱い（3年未満は面談頻度変わらず）
+    const effectivelySenior = p.ageGroup==="B" && p.status!=="new";
     if (boardTab==="youth") {
-      // 44歳以下：ageGroup=A かつ youthリスナー担当
-      // ageSoonでseniorリスナーに先行移動済みの場合は除外（seniorタブに表示）
-      return p.ageGroup==="A" && (onYouth || (!p.ageSoon && onSenior));
+      // 44歳以下：ageGroup=A または 3年未満（年齢問わず）
+      // ageSoonでseniorリスナーに先行移動済みかつ status="normal" の場合は除外
+      return (!effectivelySenior) && (onYouth || (!(p.ageSoon && p.status!=="new") && onSenior));
     }
     if (boardTab==="senior") {
-      // 45歳以上：ageGroup=B、またはageSoonで先行seniorリスナーに移動済み
-      return p.ageGroup==="B" || (p.ageGroup==="A" && p.ageSoon && onSenior);
+      // 45歳以上：ageGroup=B かつ status="normal"、またはageSoonで先行seniorリスナーに移動済み
+      return effectivelySenior || (p.ageGroup==="A" && p.ageSoon && p.status!=="new" && onSenior);
     }
     return true;
   });
@@ -1490,7 +1499,7 @@ function App() {
             const nextLabel = nm < 6 ? `${today.getFullYear()}年7月1日（後期）` : `${today.getFullYear()+1}年1月1日（前期）`;
 
             const normalSwitch = players.filter(p=>p.statusSoon===true);
-            const ageSwitch    = players.filter(p=>p.ageSoon===true && p.ageGroup==="A");
+            const ageSwitch    = players.filter(p=>p.ageSoon===true && p.ageGroup==="A" && p.status!=="new"); // 3年未満は除外（頻度変わらず）
 
             if (normalSwitch.length===0 && ageSwitch.length===0) return null;
 
