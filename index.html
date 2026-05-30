@@ -648,9 +648,9 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
       <div style={{ display:"flex", alignItems:"center", padding:"14px 16px 12px",
         borderBottom:"0.5px solid var(--color-border-tertiary)" }}>
         <button onClick={onClose}
-          style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none",
-            background:"var(--color-background-secondary)", color:"var(--color-text-secondary)",
-            cursor:"pointer", marginRight:12 }}>← 戻る</button>
+          style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)",
+            background:"var(--color-background-secondary)", color:"var(--color-text-primary)",
+            cursor:"pointer", marginRight:12, fontWeight:500 }}>← 戻る</button>
         <span style={{ fontSize:16, fontWeight:600, flex:1 }}>{isNew?"プレイヤー追加":"プレイヤー編集"}</span>
       </div>
       <div style={{ overflowY:"auto", flex:1, padding:"16px 16px 40px" }}>
@@ -795,7 +795,7 @@ function HistoryPage({ retired, listeners, onRestore, onDelete, onClose, isAdmin
         borderBottom:"0.5px solid var(--color-border-tertiary)" }}>
         <button onClick={onClose}
           style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none",
-            background:"var(--color-background-secondary)", color:"var(--color-text-secondary)", cursor:"pointer" }}>← 戻る</button>
+            background:"var(--color-background-secondary)", color:"var(--color-text-primary)", border:"0.5px solid var(--color-border-secondary)", cursor:"pointer", fontWeight:500 }}>← 戻る</button>
         <span style={{ fontSize:15, fontWeight:600, flex:1 }}>退職者履歴</span>
         <span style={{ fontSize:12, color:"var(--color-text-tertiary)" }}>{filtered.length}名</span>
       </div>
@@ -873,7 +873,7 @@ function App() {
   const [adminNotes,        setAdminNotes]        = useState("");  // 管理者備考
   const [notesEditMode,     setNotesEditMode]     = useState(false); // 備考編集中
   const [notesDraft,        setNotesDraft]        = useState("");  // 編集中テキスト
-  const [notesSaving,       setNotesSaving]       = useState(false); // 次期切替予告でのリスナー変更対象プレイヤーID
+  const [notesSaving,       setNotesSaving]       = useState(false); // 備考保存中
   const [ageSoonPid,    setAgeSoonPid]    = useState(null); // ⚡カードのリスナー変更ダイアログ対象PID
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
@@ -929,7 +929,7 @@ function App() {
       setListeners(cached.listeners|| []);
       setRetired(cached.retired   || []);
       setCareerListeners(cached.careerListeners || []);
-        setAdminNotes(data.notes || "");
+      setAdminNotes(cached.notes || ""); // ← cached から取得
       setAppState("dashboard"); // キャッシュで即表示
       setLoadStep(3); setLoadMsg("バックグラウンドで最新データ取得中...");
       // バックグラウンドで最新データを取得して更新
@@ -939,7 +939,7 @@ function App() {
         setListeners(fresh.listeners    || []);
         setRetired(fresh.retired        || []);
         setCareerListeners(fresh.careerListeners || []);
-        setAdminNotes(data.notes || "");
+        setAdminNotes(fresh.notes || ""); // ← fresh から取得
         saveCache(fresh);
       } catch(e) { /* 失敗してもキャッシュデータを使い続ける */ }
       return;
@@ -1298,7 +1298,7 @@ function App() {
     return (
       <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column", height:"100vh", maxHeight:"100vh", background:"var(--color-background-primary)" }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", flexShrink:0 }}>
-          <button onClick={()=>{setShowSearch(false);setSearchQuery("");setSearchLid("");}} style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none", background:"var(--color-background-secondary)", color:"var(--color-text-secondary)", cursor:"pointer", flexShrink:0 }}>← 戻る</button>
+          <button onClick={()=>{setShowSearch(false);setSearchQuery("");setSearchLid("");}} style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none", background:"var(--color-background-secondary)", color:"var(--color-text-primary)", border:"0.5px solid var(--color-border-secondary)", cursor:"pointer", flexShrink:0, fontWeight:500 }}>← 戻る</button>
           <input autoFocus placeholder="名前を入力（例：高橋、正樹）" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}
             style={{ flex:1, fontSize:15, padding:"9px 12px", borderRadius:9, border:"1.5px solid #185FA5", outline:"none" }} />
           {searchQuery&&<button onClick={()=>setSearchQuery("")} style={{ fontSize:18, padding:"2px 8px", border:"none", background:"none", color:"var(--color-text-tertiary)", cursor:"pointer", flexShrink:0 }}>✕</button>}
@@ -1348,7 +1348,10 @@ function App() {
                   </div>
                 </div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                  <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{p.ageGroup==="B"?"45歳以上":"44歳以下"}　/　{p.joinType==="career"?"中途":"新卒"}</span>
+                  <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>
+                    {p.ageGroup==="B"?"45歳以上":"44歳以下"}　/　{p.joinType==="career"?"中途":"新卒"}
+                    {isAdmin && p.age!=null && <span style={{ marginLeft:8, fontWeight:600, color:"#185FA5" }}>{p.age}歳</span>}
+                  </span>
                   <span style={{ fontSize:10, padding:"2px 8px", borderRadius:10, background:f.bg, color:f.color, fontWeight:600 }}>{f.label}</span>
                 </div>
               </div>
@@ -1698,13 +1701,22 @@ function App() {
             </div>
           )}
 
-          {/* パスワード変更（管理者のみ） */}
-          {isAdmin&&(
-            <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
-              <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>⚙ PIN変更</div>
-              <SettingsTab pin={pin} onChangePass={p=>setPin(p)} />
-            </div>
-          )}
+          {/* パスワード変更（管理者のみ・折りたたみ式） */}
+          {isAdmin&&(()=>{
+            const [pinOpen, setPinOpen] = React.useState(false);
+            return (
+              <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+                <button onClick={()=>setPinOpen(o=>!o)}
+                  style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%",
+                    background:"none", border:"none", cursor:"pointer", padding:0, marginBottom: pinOpen ? 12 : 0 }}>
+                  <span style={{ fontSize:13, fontWeight:600 }}>⚙ PIN変更</span>
+                  <span style={{ fontSize:13, color:"var(--color-text-tertiary)", transition:"transform 0.2s",
+                    transform: pinOpen ? "rotate(180deg)" : "rotate(0deg)", display:"inline-block" }}>▼</span>
+                </button>
+                {pinOpen && <SettingsTab pin={pin} onChangePass={p=>{setPin(p);setPinOpen(false);}} />}
+              </div>
+            );
+          })()}
         </div>
       ):(
         <div style={{ display:"flex", gap:4, overflowX:"auto", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
