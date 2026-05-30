@@ -104,32 +104,43 @@ async function apiPost(pin, action, payload = {}) {
 // ── 面談頻度 ──────────────────────────────────────────────
 // ageGroup: "A"=44歳以下, "B"=45歳以上
 function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
-  // status="new" は ageGroup より完全に優先（3年未満は年齢に関わらず面談頻度が変わらない）
-  if (status === "new" && statusSoon)
-    return { freq:24, label:"2週/1回→切替予定", bg:"#FFEDE0", color:"#C0501A" }; // 新卒・切替予定
-  if (status === "new" && joinType !== "career")
-    return { freq:24, label:"2週/1回（新人）",   bg:"#FAECE7", color:"#993C1D" }; // 新卒
-  if (status === "new")
-    // 中途入社3年未満：45歳以上でも2ヶ月/1回のまま
-    return { freq:6,  label:"2ヶ月/1回（新人）", bg:"#EAF3DE", color:"#3B6D11" };
-  // 以下は status="normal" のみ
-  if (ageGroup === "B")
-    return { freq:3,  label:"4ヶ月/1回（通常）", bg:"#E6F1FB", color:"#185FA5" };
-  if (ageSoon)
-    return { freq:6,  label:"2ヶ月/1回→切替予定",bg:"#FFF8E1", color:"#B8860B" };
-  return   { freq:6,  label:"2ヶ月/1回（通常）", bg:"#EAF3DE", color:"#3B6D11" };
+  if (status === "new") {
+    if (joinType !== "career") {
+      // 【新卒】3年未満：2週/1回
+      if (statusSoon) return { freq:24, label:"2週/1回→切替予定",    bg:"#FFEDE0", color:"#C0501A" }; // 新卒・切替予定
+      return               { freq:24, label:"2週/1回（新卒）",       bg:"#FAECE7", color:"#993C1D" };
+    } else {
+      // 【中途】3年未満：2ヶ月/1回（通常と同じ、年齢に関わらず）
+      if (statusSoon && ageGroup === "B")
+        return             { freq:6,  label:"2ヶ月→4ヶ月 切替予定",  bg:"#FFF8E1", color:"#B8860B" }; // 45歳以上・切替予定
+      return               { freq:6,  label:"2ヶ月/1回（中途新人）", bg:"#EAF3DE", color:"#3B6D11" };
+    }
+  }
+  // status="normal" のみ
+  if (ageGroup === "B") return { freq:3, label:"4ヶ月/1回（通常）",    bg:"#E6F1FB", color:"#185FA5" };
+  if (ageSoon)          return { freq:6, label:"2ヶ月/1回→切替予定",  bg:"#FFF8E1", color:"#B8860B" };
+  return                       { freq:6, label:"2ヶ月/1回（通常）",   bg:"#EAF3DE", color:"#3B6D11" };
 }
 
 // borderStyle: "solid"=通常, "dashed"=新人切替予定(大破線), "dotted"=44歳切替予定(細点線)
 function freqCardStyle(status, ageGroup, joinType, ageSoon, statusSoon) {
-  // status="new" は ageGroup より完全に優先（3年未満は年齢に関わらずカード色が変わらない）
-  if (status === "maternity")                    return { bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid" };
-  if (status === "new" && statusSoon)            return { bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed" }; // 新卒→切替予定
-  if (status === "new")                          return { bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid" }; // 3年未満（newgrad/career共通）
-  // 以下は status="normal" のみ
-  if (ageGroup === "B")                          return { bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid" };
-  if (ageSoon)                                   return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" }; // 細点線
-  return                                                { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid" };
+  if (status === "maternity") return { bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid" };
+  if (status === "new") {
+    if (joinType !== "career") {
+      // 【新卒】
+      if (statusSoon) return { bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed" }; // 薄サーモン破線：切替予定
+      return                 { bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid"  }; // 薄オレンジ：2週/1回
+    } else {
+      // 【中途】薄グリーン（通常と同色）
+      if (statusSoon && ageGroup === "B") return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" }; // 薄黄色点線：4ヶ月切替予定
+      if (statusSoon)                     return { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"dotted" }; // 薄グリーン点線：切替間近
+      return                                     { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid"  }; // 薄グリーン：通常と同じ
+    }
+  }
+  // status="normal" のみ
+  if (ageGroup === "B") return { bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid"  };
+  if (ageSoon)          return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" };
+  return                       { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid"  };
 }
 
 function formatDate(d) {
@@ -308,14 +319,14 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
         <div style={{ overflowY:"auto", padding:"10px 12px", display:"flex", flexDirection:"column", gap:8 }}>
           {alerts.map((a,i)=>dismissed.includes(i)?null:(
             <div key={i} style={{
-              background:a.type==="maternity"?"#EAF3FB":a.type==="board_mismatch"?"#FFF0E0":a.type==="career_mismatch"?"#EDF7ED":"#FFFBE6",
-              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="board_mismatch"?"#F5A623":a.type==="career_mismatch"?"#5C9E5C":"#FFD93D"}`,
+              background:a.type==="maternity"?"#EAF3FB":a.type==="board_mismatch"?"#FFF0E0":a.type==="career_mismatch"?"#EDF7ED":a.type==="career_switch"?"#FFFBE6":"#FFFBE6",
+              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="board_mismatch"?"#F5A623":a.type==="career_mismatch"?"#5C9E5C":a.type==="career_switch"?"#FFD93D":"#FFD93D"}`,
               borderRadius:10, padding:"10px 14px 10px 12px", fontSize:12, position:"relative" }}>
               <button onClick={()=>onDismiss(i)}
                 style={{ position:"absolute", top:6, right:8, fontSize:14, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-tertiary)" }}>✕</button>
               <div style={{ fontWeight:600, marginBottom:4, paddingRight:20,
-                color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":a.type==="career_mismatch"?"#2E7D32":"#8A6800" }}>
-                {a.type==="maternity"?"🩵 産休・育休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":"⚠ その他通知"}
+                color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":a.type==="career_mismatch"?"#2E7D32":a.type==="career_switch"?"#B8860B":"#8A6800" }}>
+                {a.type==="maternity"?"🩵 産休・育休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":a.type==="career_switch"?"⚡ 中途3年経過→4ヶ月切替予定":"⚠ その他通知"}
               </div>
               <div style={{ color:"var(--color-text-primary)", lineHeight:1.5, marginBottom: a.type==="board_mismatch"?10:0 }}>{a.message}</div>
               {(a.type==="board_mismatch" || a.type==="career_mismatch") && onApprove && a.pid && (
@@ -399,7 +410,10 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1, minWidth:0 }}>
           {player.name}
         </span>
-        {(player.ageSoon && player.status!=="new" && player.ageGroup!=="B") && (
+        {(
+          (player.ageSoon && player.status!=="new" && player.ageGroup!=="B") || // 44歳→45歳切替予定
+          (player.statusSoon && player.joinType==="career" && player.ageGroup==="B") // 中途3年経過→4ヶ月切替予定
+        ) && (
           <span style={{ fontSize:8, flexShrink:0, lineHeight:1 }} title="次期切替予定">⚡</span>
         )}
       </div>
@@ -1168,6 +1182,18 @@ function App() {
       }
     });
 
+    // 中途3年経過→4ヶ月切替予定チェック（45歳以上のみ頻度変化あり）
+    players.filter(p =>
+      p.statusSoon && p.joinType === "career" && p.ageGroup === "B" && !p.approvedMismatch
+    ).forEach(p => {
+      const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+      al.push({
+        type:    "career_switch",
+        pid:     p.id,
+        message: `${p.name}さん（中途）は次期で3年経過し、面談頻度が2ヶ月/1回→4ヶ月/1回に変更予定です。（担当：${lName}）`,
+      });
+    });
+
     // 中途入社担当ルール違反チェック
     players.filter(p => p.careerRestricted && !p.approvedMismatch).forEach(p => {
       if (careerListeners.length > 0 && !careerListeners.includes(p.lid)) {
@@ -1568,16 +1594,49 @@ function App() {
                 {/* 新人→通常切替予定 */}
                 {normalSwitch.length>0&&(
                   <div>
-                    <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 新人→通常（GAS判定）{normalSwitch.length}名</div>
-                    {normalSwitch.map(p=>(
+                    <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 新人→通常（新卒）{normalSwitch.filter(p=>p.joinType!=="career").length}名</div>
+                    {normalSwitch.filter(p=>p.joinType!=="career").map(p=>(
                       <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#F0F7E6", borderRadius:8, marginBottom:4 }}>
                         <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
                         <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
-                        <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#BAE09A", color:"#1E5C10", fontWeight:600 }}>新人中</span>
+                        <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#BAE09A", color:"#1E5C10", fontWeight:600 }}>新卒3年</span>
                       </div>
                     ))}
                   </div>
                 )}
+                {/* 中途3年経過→4ヶ月切替予定（45歳以上のみ頻度変化） */}
+                {(()=>{
+                  const careerSwitch = normalSwitch.filter(p=>p.joinType==="career"&&p.ageGroup==="B");
+                  const careerNormal = normalSwitch.filter(p=>p.joinType==="career"&&p.ageGroup==="A");
+                  return (careerSwitch.length>0||careerNormal.length>0)&&(
+                    <div style={{ marginTop:8 }}>
+                      {careerSwitch.length>0&&(
+                        <>
+                          <div style={{ fontSize:12, fontWeight:600, color:"#B8860B", marginBottom:6 }}>⚡ 中途3年経過→4ヶ月切替予定 {careerSwitch.length}名</div>
+                          {careerSwitch.map(p=>(
+                            <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#FFFDE7", borderRadius:8, marginBottom:4 }}>
+                              <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                              <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
+                              <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>2ヶ月→4ヶ月</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      {careerNormal.length>0&&(
+                        <>
+                          <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 中途3年経過→通常移行（頻度変化なし）{careerNormal.length}名</div>
+                          {careerNormal.map(p=>(
+                            <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#F0F7E6", borderRadius:8, marginBottom:4 }}>
+                              <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                              <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
+                              <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#BAE09A", color:"#1E5C10", fontWeight:600 }}>中途3年</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
