@@ -1357,7 +1357,11 @@ function App() {
   const careerCount    = players.filter(p=>p.status==="new"&&p.joinType==="career").length;
   const totalActive    = newgradCount+careerCount+youthCount+seniorCount;
   const matCount       = players.filter(p=>p.status==="maternity").length;
-  const listenerCount  = new Set(listeners.map(l=>l.id)).size;
+  const listenerCount  = listeners.filter(l =>
+    // "s"サフィックスなしのIDはそのままカウント
+    // "s"サフィックスありのIDは、同一ベースID（sなし）が存在する場合は除外（同一人物）
+    !l.id.endsWith("s") || !listeners.some(l2 => l2.id === l.id.slice(0, -1))
+  ).length;
   const BOARD_TABS = [{key:"youth",label:"44歳以下"},{key:"senior",label:"45歳以上"},{key:"detail",label:"詳細"}];
   const FREQ_TABS  = [{key:"all",label:"全員"},{key:"new",label:"新人（2週/1回）"},{key:"normal",label:"通常（2ヶ月以上）"}];
 
