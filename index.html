@@ -105,15 +105,17 @@ async function apiPost(pin, action, payload = {}) {
 // ageGroup: "A"=44歳以下, "B"=45歳以上
 function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
   if (status === "new") {
-    if (joinType !== "career") {
-      // 【新卒】3年未満：2週/1回
-      if (statusSoon) return { freq:24, label:"2週/1回→切替予定",    bg:"#FFEDE0", color:"#C0501A" }; // 新卒・切替予定
-      return               { freq:24, label:"2週/1回（新卒）",       bg:"#FAECE7", color:"#993C1D" };
+    const isUniv = joinType === "newgrad_university" || joinType === "newgrad"; // 大卒（旧newgrad互換）
+    if (isUniv) {
+      // 【大卒新卒】3年未満：2週/1回
+      if (statusSoon) return { freq:24, label:"2週/1回→切替予定",    bg:"#FFEDE0", color:"#C0501A" };
+      return               { freq:24, label:"2週/1回（大卒新卒）",   bg:"#FAECE7", color:"#993C1D" };
     } else {
-      // 【中途】3年未満：2ヶ月/1回（通常と同じ、年齢に関わらず）
+      // 【高卒新卒・中途】3年未満：2ヶ月/1回（年齢に関わらず）
       if (statusSoon && ageGroup === "B")
-        return             { freq:6,  label:"2ヶ月→4ヶ月 切替予定",  bg:"#FFF8E1", color:"#B8860B" }; // 45歳以上・切替予定
-      return               { freq:6,  label:"2ヶ月/1回（中途新人）", bg:"#EAF3DE", color:"#3B6D11" };
+        return             { freq:6,  label:"2ヶ月→4ヶ月 切替予定",  bg:"#FFF8E1", color:"#B8860B" };
+      const lbl = joinType === "newgrad_highschool" ? "2ヶ月/1回（高卒新卒）" : "2ヶ月/1回（中途新人）";
+      return               { freq:6,  label:lbl,                    bg:"#EAF3DE", color:"#3B6D11" };
     }
   }
   // status="normal" のみ
@@ -126,12 +128,13 @@ function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
 function freqCardStyle(status, ageGroup, joinType, ageSoon, statusSoon) {
   if (status === "maternity") return { bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid" };
   if (status === "new") {
-    if (joinType !== "career") {
-      // 【新卒】
+    const isUniv = joinType === "newgrad_university" || joinType === "newgrad"; // 大卒（旧newgrad互換）
+    if (isUniv) {
+      // 【大卒新卒】薄オレンジ
       if (statusSoon) return { bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed" }; // 薄サーモン破線：切替予定
       return                 { bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid"  }; // 薄オレンジ：2週/1回
     } else {
-      // 【中途】薄グリーン（通常と同色）
+      // 【高卒新卒・中途】薄グリーン（通常と同色）
       if (statusSoon && ageGroup === "B") return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" }; // 薄黄色点線：4ヶ月切替予定
       if (statusSoon)                     return { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"dotted" }; // 薄グリーン点線：切替間近
       return                                     { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid"  }; // 薄グリーン：通常と同じ
@@ -301,6 +304,37 @@ function SettingsTab({ pin, onChangePass }) {
   );
 }
 
+// ── CollapsiblePin（PIN変更折りたたみ）──────────────────────
+function CollapsiblePin({ pin, onChangePass }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+      <button onClick={()=>setOpen(o=>!o)}
+        style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%",
+          background:"none", border:"none", cursor:"pointer", padding:0, marginBottom: open ? 12 : 0 }}>
+        <span style={{ fontSize:13, fontWeight:600 }}>⚙ PIN変更</span>
+        <span style={{ fontSize:13, color:"var(--color-text-tertiary)", transition:"transform 0.2s",
+          transform: open ? "rotate(180deg)" : "rotate(0deg)", display:"inline-block" }}>▼</span>
+      </button>
+      {open && <SettingsTab pin={pin} onChangePass={p=>{ onChangePass(p); setOpen(false); }} />}
+    </div>
+  );
+}
+
+// ── Toast通知 ─────────────────────────────────────────────
+function Toast({ message, visible }) {
+  if (!visible || !message) return null;
+  return (
+    <div style={{ position:"fixed", bottom:88, left:"50%", transform:"translateX(-50%)",
+      background:"rgba(20,20,20,0.88)", color:"#fff", padding:"10px 22px",
+      borderRadius:20, fontSize:13, fontWeight:600, zIndex:9999,
+      whiteSpace:"nowrap", pointerEvents:"none",
+      boxShadow:"0 4px 16px rgba(0,0,0,0.25)", letterSpacing:0.2 }}>
+      {message}
+    </div>
+  );
+}
+
 // ── AlertPanel ────────────────────────────────────────────
 function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
   const visible = alerts.filter((_,i)=>!dismissed.includes(i));
@@ -355,7 +389,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
 
 // ── PlayerCard ────────────────────────────────────────────
 function PlayerCard({ player, isAdmin, highlight, selected, dragging,
-  onLongPress, onTap, onDragStart, onDragMove, onDragEnd }) {
+  onLongPress, onTap, onDragStart, onDragMove, onDragEnd, prevListenerName }) {
   const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon, player.statusSoon);
   const pressTimer = useRef(null);
   const pressOrigin= useRef(null);
@@ -419,6 +453,11 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
       </div>
       {player.status==="maternity" && (
         <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>産休・育休中</div>
+      )}
+      {prevListenerName && (
+        <div style={{ fontSize:8, color:"var(--color-text-tertiary)", marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          前：{prevListenerName}
+        </div>
       )}
     </div>
   );
@@ -519,13 +558,14 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
   onEditPlayer, onAddPlayer, onMoveTo, highlightLid, highlightPid,
   dragOverLid, dragPid, dragOverPid, dragOverPos, onDragStart, onDragMove, onDragEnd,
   isListenerDragging, isListenerDragOver, onListenerDragStart, onListenerDragMove, onListenerDragEnd,
-  ageSoonPid, onAgeSoonSelect, seniorListeners }) {
+  ageSoonPid, onAgeSoonSelect, seniorListeners, listeners }) {
   const [showDetail, setShowDetail] = useState(false);
   const isHighlight  = highlightLid===listener.id;
   const isDragTarget = dragOverLid===listener.id;
 
-  const activeLoad = players.filter(p=>p.status!=="maternity")
+  const activeLoad  = players.filter(p=>p.status!=="maternity")
     .reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon).freq, 0);
+
   const pct    = maxLoad>0?Math.round((activeLoad/maxLoad)*100):0;
   const isWarn = activeLoad>=LOAD_WARN;
 
@@ -563,10 +603,14 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
           )}
           <PlayerCard player={p} isAdmin={isAdmin}
             highlight={highlightPid===p.id} selected={selectedPid===p.id} dragging={dragPid===p.id}
+            prevListenerName={p.prevLid?(listeners||[]).find(l=>l.id===p.prevLid)?.name||null:null}
             onLongPress={()=>onSelectPlayer(p.id)}
             onTap={()=>{
               if(selectedPid===p.id) { onEditPlayer(p); return; }
-              if(selectedPid) { onMoveTo(listener.id); return; }
+              if(selectedPid) {
+                // 別のプレイヤーをタップ → 選択を切り替え（移動しない）
+                onSelectPlayer(p.id); return;
+              }
               // ⚡カード（ageSoon）を管理者モードでタップ → リスナー変更ダイアログ
               if(isAdmin && p.ageSoon && onAgeSoonSelect) { onAgeSoonSelect(p.id); return; }
               onSelectPlayer(p.id);
@@ -630,7 +674,7 @@ function Field({ label, children }) {
 // ── EditPlayerSheet ───────────────────────────────────────
 function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetire, onClose, allPlayers, allRetired }) {
   const init = player || { name:"", lid:defaultLid||"l1", status:"normal",
-    ageGroup:"A", joinType:"newgrad", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"" };
+    ageGroup:"A", joinType:"newgrad_university", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"" };
   const [data, setData]         = useState({ ...init });
   const [retireMode, setRetireMode] = useState(false);
   const [dupWarning, setDupWarning] = useState(null); // 重複警告: null or { name, listenerName, isRetired }
@@ -671,9 +715,10 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
         )}
 
         <Field label="入社区分">
-          <select value={data.joinType||"newgrad"} onChange={e=>setData(d=>({...d,joinType:e.target.value}))} style={inp}>
-            <option value="newgrad">新卒</option>
-            <option value="career">中途</option>
+          <select value={data.joinType||"newgrad_university"} onChange={e=>setData(d=>({...d,joinType:e.target.value}))} style={inp}>
+            <option value="newgrad_university">新卒②大卒（2週/1回）</option>
+            <option value="newgrad_highschool">新卒①高卒（2ヶ月/1回）</option>
+            <option value="career">中途（2ヶ月/1回）</option>
           </select>
         </Field>
         <Field label="ステータス">
@@ -875,6 +920,29 @@ function App() {
   const [notesDraft,        setNotesDraft]        = useState("");  // 編集中テキスト
   const [notesSaving,       setNotesSaving]       = useState(false); // 備考保存中
   const [ageSoonPid,    setAgeSoonPid]    = useState(null); // ⚡カードのリスナー変更ダイアログ対象PID
+  // ① トースト通知
+  const [toastMsg,     setToastMsg]     = useState("");
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastTimerRef = React.useRef(null);
+  const showToast = React.useCallback((msg) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMsg(msg); setToastVisible(true);
+    toastTimerRef.current = setTimeout(() => setToastVisible(false), 2500);
+  }, []);
+  // ② Undo（1世代前のplayers）
+  const [undoPlayers,  setUndoPlayers]  = useState(null);
+  const [undoVisible,  setUndoVisible]  = useState(false);
+  const undoTimerRef = React.useRef(null);
+  const pushUndo = React.useCallback((prev) => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoPlayers(prev); setUndoVisible(true);
+    undoTimerRef.current = setTimeout(() => setUndoVisible(false), 5000);
+  }, []);
+  // ⑦ 担当変更確認ダイアログ
+  const [pendingMove,  setPendingMove]  = useState(null); // { pid, targetLid }
+  // ⑤ 変更履歴
+  const [changelog,    setChangelog]    = useState(null); // null=未取得, []=取得済み
+  const [changelogLoading, setChangelogLoading] = useState(false);
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
   const [dismissedIds, setDismissedIds] = useState([]);
@@ -1026,7 +1094,12 @@ function App() {
     if (isAdmin) triggerSave(next);
   };
   const addPlayerFn = (data) => {
-    const next = [...players, { id:"p"+Date.now(), ...data }];
+    const next = [...players, {
+      id:"p"+Date.now(), ...data,
+      ageSoon:false, statusSoon:false,
+      careerRestricted:false, approvedMismatch:false,
+      age:null,
+    }];
     setPlayers(next);
     if (isAdmin) triggerSave(next);
   };
@@ -1039,7 +1112,7 @@ function App() {
   };
   const restoreRetired = (rid) => {
     const r = retired.find(x=>x.id===rid); if(!r) return;
-    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"", approvedMismatch:false }];
+    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad_university", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"", approvedMismatch:false }];
     const nextRet = retired.filter(x=>x.id!==rid);
     setPlayers(nextPl); setRetired(nextRet);
     if (isAdmin) triggerSave(nextPl, nextRet);
@@ -1051,7 +1124,7 @@ function App() {
   };
 
   // ── 移動・並び替え ────────────────────────────────────
-  const movePlayerTo = (pid, targetLid) => {
+  const movePlayerTo = (pid, targetLid, withUndo=false) => {
     const next = players.map(p=>{
       if(p.id!==pid) return p;
       if(p.lid===targetLid) return p;
@@ -1062,11 +1135,15 @@ function App() {
         const days=changedAt?Math.floor((now-changedAt)/86400000):999;
         if(days>=PREV_DAYS) newPrevLid=p.lid;
       }
-      // 変更履歴を記録
       const fromName = listeners.find(l=>l.id===p.lid)?.name || p.lid;
       const toName   = listeners.find(l=>l.id===targetLid)?.name || targetLid;
       logChange(p.name, "担当変更", fromName, toName);
-      return {...p, lid:targetLid, prevLid:newPrevLid, lastLidChangedAt:new Date().toISOString().split("T")[0]};
+      if (withUndo) {
+        const tName = listeners.find(l=>l.id===targetLid)?.name || targetLid;
+        showToast(`✓ ${p.name}さん → ${tName}`);
+        pushUndo(players); // ② Undo用に現在のplayersを保存
+      }
+      return {...p, lid:targetLid, prevLid:newPrevLid, lastLidChangedAt:new Date().toISOString().split("T")[0], approvedMismatch:false};
     });
     setPlayers(next);
     if(isAdmin) triggerSave(next);
@@ -1088,9 +1165,14 @@ function App() {
     setPlayers(arr);
     if(isAdmin) triggerSave(arr);
   };
-  const moveSelectedTo = (lid) => { if(!selectedPid) return; movePlayerTo(selectedPid,lid); setSelectedPid(null); };
+  // ⑦ 選択プレイヤーの移動は確認ダイアログを経由（タップ操作のみ）
+  const moveSelectedTo = (lid) => {
+    if(!selectedPid) return;
+    setPendingMove({ pid: selectedPid, targetLid: lid });
+    setSelectedPid(null);
+  };
   // ⚡ageSoonダイアログからの移動（特定のpidを指定）
-  const moveSpecificTo = (lid, pid) => { if(!pid||!lid) return; movePlayerTo(pid, lid); };
+  const moveSpecificTo = (lid, pid) => { if(!pid||!lid) return; movePlayerTo(pid, lid, true); };
 
   // ── リスナー列並び替え ────────────────────────────────
   const [listenerDragId,  setListenerDragId]  = useState(null);
@@ -1130,6 +1212,7 @@ function App() {
 
   // ── プレイヤードラッグ ────────────────────────────────
   const handleDragStart = (pid,x,y) => { setDragPid(pid); setDragPos({x,y}); setSelectedPid(null); };
+  const COL_BUFFER = 12; // 列左右のバッファゾーン（px）：この幅は列切替を判定しない
   const handleDragMove  = (x,y) => {
     setDragPos({x,y});
     const els=document.elementsFromPoint(x,y);
@@ -1143,14 +1226,23 @@ function App() {
     }
     setDragOverPid(null); setDragOverPos(null);
     const colEl=els.find(el=>el?.getAttribute?.("data-listener-id"));
-    setDragOverLid(colEl?colEl.getAttribute("data-listener-id"):null);
+    if(colEl){
+      // バッファゾーン：列の左右12pxは判定しない（誤移動防止）
+      const colRect=colEl.getBoundingClientRect();
+      if(x >= colRect.left+COL_BUFFER && x <= colRect.right-COL_BUFFER){
+        setDragOverLid(colEl.getAttribute("data-listener-id"));
+      }
+      // バッファゾーン内は現在の列を維持（nullにしない）
+    } else {
+      setDragOverLid(null);
+    }
   };
   const handleDragEnd = (x,y) => {
     if(dragPid){
       if(dragOverPid){
         const src=players.find(p=>p.id===dragPid), tgt=players.find(p=>p.id===dragOverPid);
-        if(src&&tgt){ src.lid===tgt.lid?reorderPlayer(dragPid,dragOverPid,dragOverPos):movePlayerTo(dragPid,tgt.lid); }
-      } else if(dragOverLid){ movePlayerTo(dragPid,dragOverLid); }
+        if(src&&tgt){ src.lid===tgt.lid?reorderPlayer(dragPid,dragOverPid,dragOverPos):movePlayerTo(dragPid,tgt.lid,true); }
+      } else if(dragOverLid){ movePlayerTo(dragPid,dragOverLid,true); }
     }
     setDragPid(null); setDragOverLid(null); setDragOverPid(null); setDragOverPos(null);
   };
@@ -1207,6 +1299,7 @@ function App() {
     });
 
     if(al.length>0){setAlerts(al);setShowAlerts(true);setDismissedIds([]);}
+    showToast("🔓 管理者モード");
   };
 
   // ── 検索 ─────────────────────────────────────────────
@@ -1219,7 +1312,9 @@ function App() {
       })
     : [];
   const handleSearchSelect = (p) => {
-    setBoardTab(p.ageGroup==="B"?"senior":"youth");
+    // status="new"(3年未満)のプレイヤーはageGroupがBでも44歳以下ボードにいる
+    const goSenior = p.ageGroup==="B" && p.status!=="new";
+    setBoardTab(goSenior?"senior":"youth");
     setHighlightLid(p.lid); setHighlightPid(p.id);
     setSearchQuery(""); setSearchLid(""); setShowSearch(false);
     setTimeout(()=>{
@@ -1255,9 +1350,10 @@ function App() {
   const maxLoad = Math.max(...loads,1);
 
   // サマリ
-  const newgradCount   = players.filter(p=>p.status==="new"&&p.joinType!=="career").length;
+  const newgradCount   = players.filter(p=>p.status==="new"&&(p.joinType==="newgrad_university"||p.joinType==="newgrad")).length;
   const youthCount     = players.filter(p=>p.ageGroup==="A"&&p.status==="normal").length;
   const seniorCount    = players.filter(p=>p.ageGroup==="B"&&p.status==="normal").length;
+  const highschoolCount = players.filter(p=>p.status==="new"&&p.joinType==="newgrad_highschool").length;
   const careerCount    = players.filter(p=>p.status==="new"&&p.joinType==="career").length;
   const totalActive    = newgradCount+careerCount+youthCount+seniorCount;
   const matCount       = players.filter(p=>p.status==="maternity").length;
@@ -1349,7 +1445,9 @@ function App() {
                 </div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>
-                    {p.ageGroup==="B"?"45歳以上":"44歳以下"}　/　{p.joinType==="career"?"中途":"新卒"}
+                    {p.ageGroup==="B"?"45歳以上":"44歳以下"}　/　{
+                    p.joinType==="career"?"中途":
+                    p.joinType==="newgrad_highschool"?"新卒（高卒）":"新卒（大卒）"}
                     {isAdmin && p.age!=null && <span style={{ marginLeft:8, fontWeight:600, color:"#185FA5" }}>{p.age}歳</span>}
                   </span>
                   <span style={{ fontSize:10, padding:"2px 8px", borderRadius:10, background:f.bg, color:f.color, fontWeight:600 }}>{f.label}</span>
@@ -1597,8 +1695,8 @@ function App() {
                 {/* 新人→通常切替予定 */}
                 {normalSwitch.length>0&&(
                   <div>
-                    <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 新人→通常（新卒）{normalSwitch.filter(p=>p.joinType!=="career").length}名</div>
-                    {normalSwitch.filter(p=>p.joinType!=="career").map(p=>(
+                    <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 新人→通常（新卒）{normalSwitch.filter(p=>p.joinType==="newgrad_university"||p.joinType==="newgrad").length}名</div>
+                    {normalSwitch.filter(p=>p.joinType==="newgrad_university"||p.joinType==="newgrad").map(p=>(
                       <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#F0F7E6", borderRadius:8, marginBottom:4 }}>
                         <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
                         <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
@@ -1643,6 +1741,47 @@ function App() {
               </div>
             );
           })()}
+
+          {/* ⑤ 変更履歴（管理者のみ） */}
+          {isAdmin&&(
+            <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                <div style={{ fontSize:13, fontWeight:600 }}>📋 変更履歴</div>
+                <button onClick={async ()=>{
+                  setChangelogLoading(true);
+                  try {
+                    const res = await apiPost(pin, "getChangelog");
+                    setChangelog(res?.logs || []);
+                  } catch(e) { setChangelog([]); }
+                  finally { setChangelogLoading(false); }
+                }} style={{ fontSize:12, padding:"4px 12px", borderRadius:8,
+                  border:"0.5px solid var(--color-border-secondary)",
+                  background:"var(--color-background-primary)", cursor:"pointer", color:"#185FA5" }}>
+                  {changelogLoading ? "読み込み中..." : changelog===null ? "読み込む" : "更新"}
+                </button>
+              </div>
+              {changelog!==null && (
+                changelog.length===0 ? (
+                  <div style={{ fontSize:12, color:"var(--color-text-tertiary)", padding:"8px 0" }}>変更履歴がありません</div>
+                ) : (
+                  <div style={{ maxHeight:240, overflowY:"auto" }}>
+                    {changelog.map((log,i)=>(
+                      <div key={i} style={{ padding:"8px 10px", borderRadius:8, marginBottom:4,
+                        background:"var(--color-background-secondary)", fontSize:12 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:2 }}>
+                          <span style={{ fontWeight:600, color:"var(--color-text-primary)" }}>{log.playerName}</span>
+                          <span style={{ fontSize:10, color:"var(--color-text-tertiary)" }}>{String(log.datetime).slice(0,16).replace("T"," ")}</span>
+                        </div>
+                        <div style={{ color:"var(--color-text-secondary)" }}>
+                          {log.changeType}：{log.before} → {log.after}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              )}
+            </div>
+          )}
 
           {/* 📝 備考・特記事項（管理者のみ） */}
           {isAdmin&&(
@@ -1702,21 +1841,7 @@ function App() {
           )}
 
           {/* パスワード変更（管理者のみ・折りたたみ式） */}
-          {isAdmin&&(()=>{
-            const [pinOpen, setPinOpen] = React.useState(false);
-            return (
-              <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
-                <button onClick={()=>setPinOpen(o=>!o)}
-                  style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%",
-                    background:"none", border:"none", cursor:"pointer", padding:0, marginBottom: pinOpen ? 12 : 0 }}>
-                  <span style={{ fontSize:13, fontWeight:600 }}>⚙ PIN変更</span>
-                  <span style={{ fontSize:13, color:"var(--color-text-tertiary)", transition:"transform 0.2s",
-                    transform: pinOpen ? "rotate(180deg)" : "rotate(0deg)", display:"inline-block" }}>▼</span>
-                </button>
-                {pinOpen && <SettingsTab pin={pin} onChangePass={p=>{setPin(p);setPinOpen(false);}} />}
-              </div>
-            );
-          })()}
+          {isAdmin && <CollapsiblePin pin={pin} onChangePass={p=>setPin(p)} />}
         </div>
       ):(
         <div style={{ display:"flex", gap:4, overflowX:"auto", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
@@ -1746,6 +1871,7 @@ function App() {
                 ageSoonPid={ageSoonPid}
                 onAgeSoonSelect={pid=>setAgeSoonPid(prev=>prev===pid?null:pid)}
                 seniorListeners={listeners.filter(l=>l.board==="senior"||l.board==="both")}
+                listeners={listeners}
               />
             );
           })}
@@ -1833,6 +1959,67 @@ function App() {
           onDismiss={i=>setDismissedIds(prev=>[...prev,i])} onClose={()=>setShowAlerts(false)}
           onApprove={approveMismatch} />
       )}
+
+      {/* ① トースト通知 */}
+      <Toast message={toastMsg} visible={toastVisible} />
+
+      {/* ② Undo バー */}
+      {undoVisible && undoPlayers && (
+        <div style={{ position:"fixed", bottom:88, left:"50%", transform:"translateX(-50%)",
+          display:"flex", gap:12, alignItems:"center",
+          background:"rgba(20,20,20,0.92)", color:"#fff", padding:"10px 18px",
+          borderRadius:20, fontSize:13, zIndex:9998,
+          boxShadow:"0 4px 16px rgba(0,0,0,0.25)", whiteSpace:"nowrap" }}>
+          <span>移動しました</span>
+          <button onClick={()=>{
+            setPlayers(undoPlayers);
+            if(isAdmin) triggerSave(undoPlayers);
+            setUndoVisible(false); setUndoPlayers(null);
+            showToast("↩ 元に戻しました");
+          }} style={{ fontSize:13, padding:"4px 14px", borderRadius:12, border:"none",
+            background:"#fff", color:"#111", cursor:"pointer", fontWeight:700 }}>
+            ↩ 元に戻す
+          </button>
+        </div>
+      )}
+
+      {/* ⑦ 担当変更 確認ダイアログ */}
+      {pendingMove && (()=>{
+        const mover      = players.find(p=>p.id===pendingMove.pid);
+        const toListen   = listeners.find(l=>l.id===pendingMove.targetLid);
+        const fromListen = listeners.find(l=>l.id===mover?.lid);
+        return (
+          <div style={{ position:"fixed", inset:0, zIndex:9997, display:"flex",
+            alignItems:"flex-end", background:"rgba(0,0,0,0.45)" }}
+            onClick={()=>setPendingMove(null)}>
+            <div onClick={e=>e.stopPropagation()}
+              style={{ width:"100%", background:"var(--color-background-primary)",
+                borderRadius:"18px 18px 0 0", padding:"20px 20px 40px" }}>
+              <div style={{ fontSize:15, fontWeight:700, marginBottom:8 }}>担当を変更しますか？</div>
+              <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:20 }}>
+                {mover?.name}
+                <span style={{ margin:"0 8px", color:"var(--color-text-tertiary)" }}>›</span>
+                {fromListen?.name||"—"}
+                <span style={{ margin:"0 8px", color:"var(--color-text-tertiary)" }}>→</span>
+                {toListen?.name||"—"}
+              </div>
+              <div style={{ display:"flex", gap:12 }}>
+                <button onClick={()=>setPendingMove(null)}
+                  style={{ flex:1, padding:13, borderRadius:12,
+                    border:"0.5px solid var(--color-border-secondary)",
+                    background:"none", fontSize:14, cursor:"pointer" }}>キャンセル</button>
+                <button onClick={()=>{
+                  movePlayerTo(pendingMove.pid, pendingMove.targetLid, true);
+                  setPendingMove(null);
+                }} style={{ flex:1, padding:13, borderRadius:12, border:"none",
+                  background:"#185FA5", color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
+                  移動する
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
