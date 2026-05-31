@@ -1022,8 +1022,7 @@ function App() {
   useEffect(()=>{ loadData(false); }, []);
 
   // 案A: 再レンダリング後にスクロール位置を復元（ボード表示中のみ）
-  const { useLayoutEffect } = React;
-  useLayoutEffect(() => {
+  React.useLayoutEffect(() => {
     const el = boardScrollRef.current;
     if (el && scrollXRef.current > 0) {
       el.scrollLeft = scrollXRef.current;
@@ -1845,15 +1844,14 @@ function App() {
           {boardListeners.map(l=>{
             // 通常プレイヤー（産休・育休以外）＋頻度フィルター適用
             let shown=boardPlayers.filter(p=>p.lid===l.id);
-            const isUniv = p => p.joinType==="newgrad_university"||p.joinType==="newgrad";
             // 2週/1回：大卒新卒（newgrad_university/旧newgrad）かつ3年未満
-            if(freqFilter==="new")        shown=shown.filter(p=>p.status==="new"&&!p.statusSoon&&isUniv(p));
+            if(freqFilter==="new")        shown=shown.filter(p=>p.status==="new"&&!p.statusSoon&&(p.joinType==="newgrad_university"||p.joinType==="newgrad"));
             // 2週→切替予定：大卒新卒かつstatusSoon
-            if(freqFilter==="statusSoon") shown=shown.filter(p=>p.statusSoon===true&&isUniv(p));
+            if(freqFilter==="statusSoon") shown=shown.filter(p=>p.statusSoon===true&&(p.joinType==="newgrad_university"||p.joinType==="newgrad"));
             // 2ヶ月→切替予定（45歳以上）
             if(freqFilter==="ageSoon")    shown=shown.filter(p=>p.ageSoon===true);
             // 2ヶ月/1回（通常）：status=normal または 高卒・中途の3年未満（同頻度）
-            if(freqFilter==="normal")     shown=shown.filter(p=>(p.status!=="new"&&!p.ageSoon)||(p.status==="new"&&!p.statusSoon&&!isUniv(p)));
+            if(freqFilter==="normal")     shown=shown.filter(p=>(p.status!=="new"&&!p.ageSoon)||(p.status==="new"&&!p.statusSoon&&p.joinType!=="newgrad_university"&&p.joinType!=="newgrad"));
             // 産休・育休プレイヤーは頻度フィルターに関わらず常に表示
             const maternityShown = players.filter(p=>p.status==="maternity" && p.lid===l.id);
             shown = [...shown, ...maternityShown];
