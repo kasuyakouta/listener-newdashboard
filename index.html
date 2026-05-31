@@ -427,14 +427,7 @@ const PlayerCard = React.memo(function PlayerCard({ player, isAdmin, highlight, 
       )}
     </div>
   );
-}, (prev, next) =>
-  prev.player === next.player &&
-  prev.highlight === next.highlight &&
-  prev.selected === next.selected &&
-  prev.dragging === next.dragging &&
-  prev.prevListenerName === next.prevListenerName &&
-  prev.isAdmin === next.isAdmin
-);
+});
 
 // ── ListenerHeader（長押しドラッグで列並び替え） ──────────
 function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
@@ -840,23 +833,7 @@ function HistoryPage({ retired, listeners, onRestore, onDelete, onClose, isAdmin
       </div>
     </div>
   );
-}, (prev, next) =>
-  prev.players === next.players &&
-  prev.listener === next.listener &&
-  prev.maxLoad === next.maxLoad &&
-  prev.isAdmin === next.isAdmin &&
-  prev.selectedPid === next.selectedPid &&
-  prev.dragPid === next.dragPid &&
-  prev.dragOverLid === next.dragOverLid &&
-  prev.dragOverPid === next.dragOverPid &&
-  prev.dragOverPos === next.dragOverPos &&
-  prev.highlightLid === next.highlightLid &&
-  prev.highlightPid === next.highlightPid &&
-  prev.ageSoonPid === next.ageSoonPid &&
-  prev.listenerDragId === next.listenerDragId &&
-  prev.listenerOverId === next.listenerOverId &&
-  prev.freqFilter === next.freqFilter
-);
+});
 
 // ── App ───────────────────────────────────────────────────
 function App() {
@@ -1022,7 +999,7 @@ function App() {
   useEffect(()=>{ loadData(false); }, []);
 
   // 案A: 再レンダリング後にスクロール位置を復元（ボード表示中のみ）
-  React.useLayoutEffect(() => {
+  useEffect(() => {
     const el = boardScrollRef.current;
     if (el && scrollXRef.current > 0) {
       el.scrollLeft = scrollXRef.current;
