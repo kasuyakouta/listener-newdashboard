@@ -537,11 +537,8 @@ function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
           <div style={{ fontSize:11, fontWeight:600, marginTop:2, color:isWarn?"#E53935":listener.color }}>年{activeLoad}回</div>
         </>
       )}
-      {isAdmin&&(selectedPid||(dragPid&&isDragTarget))&&(
-        <div style={{ fontSize:9, color:listener.color, marginTop:2, fontWeight:700 }}>← ここへ移動</div>
-      )}
-      {isAdmin && isListenerDragOver && (
-        <div style={{ fontSize:9, color:"#FF6B35", marginTop:2, fontWeight:700 }}>↔ ここと入替</div>
+      {isAdmin&&isDraggingThis&&(
+        <div style={{ fontSize:9, color:listener.color, marginTop:2, fontWeight:700 }}>↔ 並び替え中</div>
       )}
     </div>
   );
