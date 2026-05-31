@@ -354,7 +354,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
 }
 
 // ── PlayerCard ────────────────────────────────────────────
-const PlayerCard = React.memo(function PlayerCard({ player, isAdmin, highlight, selected, dragging,
+function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   onLongPress, onTap, onDragStart, onDragMove, onDragEnd, prevListenerName }) {
   const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon, player.statusSoon);
   const pressTimer = useRef(null);
@@ -427,7 +427,7 @@ const PlayerCard = React.memo(function PlayerCard({ player, isAdmin, highlight, 
       )}
     </div>
   );
-});
+}
 
 // ── ListenerHeader（長押しドラッグで列並び替え） ──────────
 function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
@@ -511,7 +511,7 @@ function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
 }
 
 // ── ListenerColumn ────────────────────────────────────────
-const ListenerColumn = React.memo(function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSelectPlayer,
+function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSelectPlayer,
   onEditPlayer, onAddPlayer, onMoveTo, highlightLid, highlightPid,
   dragOverLid, dragPid, dragOverPid, dragOverPos, onDragStart, onDragMove, onDragEnd,
   isListenerDragging, isListenerDragOver, onListenerDragStart, onListenerDragMove, onListenerDragEnd,
@@ -833,7 +833,7 @@ function HistoryPage({ retired, listeners, onRestore, onDelete, onClose, isAdmin
       </div>
     </div>
   );
-});
+}
 
 // ── App ───────────────────────────────────────────────────
 function App() {
@@ -998,13 +998,7 @@ function App() {
 
   useEffect(()=>{ loadData(false); }, []);
 
-  // 案A: 再レンダリング後にスクロール位置を復元（ボード表示中のみ）
-  useEffect(() => {
-    const el = boardScrollRef.current;
-    if (el && scrollXRef.current > 0) {
-      el.scrollLeft = scrollXRef.current;
-    }
-  });
+  // 案A: スクロール位置保持（onScrollで記録、boardScrollRefで復元）
 
   // 7分ごとに自動リロード（管理者モード中はスキップ）
   useEffect(()=>{
