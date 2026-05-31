@@ -8,7 +8,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <meta name="robots" content="noindex, nofollow" />
   <!-- v2026-06-01-A -->
-  <title>Listener Dashboard</title>
+  <title>リスナーダッシュボード</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -153,50 +153,16 @@ function formatDate(d) {
 
 // ── ローディング画面 ──────────────────────────────────────
 function LoadingScreen({ message, step, total }) {
-  const steps = [
-    { label:"アプリ起動",         icon:"🚀" },
-    { label:"データ接続中",       icon:"🔗" },
-    { label:"データ読み込み中",    icon:"📋" },
-  ];
   const pct = total > 0 ? Math.round((step / total) * 100) : 30;
-
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-      minHeight:"100vh", background:"var(--color-background-primary)", gap:20, padding:32 }}>
+      minHeight:"100vh", background:"var(--color-background-primary)", gap:24, padding:32 }}>
       <div style={{ fontSize:40 }}>📋</div>
-      <div style={{ fontSize:17, fontWeight:700 }}>Listener Dashboard</div>
-      {/* ステップ表示 */}
-      <div style={{ display:"flex", flexDirection:"column", gap:8, width:"min(280px,80vw)" }}>
-        {steps.map((s,i)=>{
-          const done    = step > i+1;
-          const current = step === i+1;
-          return (
-            <div key={i} style={{ display:"flex", alignItems:"center", gap:10,
-              opacity: done||current ? 1 : 0.3, transition:"opacity 0.3s" }}>
-              <span style={{ fontSize:18, minWidth:24, textAlign:"center" }}>
-                {done ? "✅" : current ? s.icon : "⬜"}
-              </span>
-              <span style={{ fontSize:13,
-                color: done?"#639922":current?"var(--color-text-primary)":"var(--color-text-tertiary)",
-                fontWeight: current?600:400 }}>
-                {s.label}
-              </span>
-              {current && (
-                <span style={{ marginLeft:"auto", fontSize:11, color:"var(--color-text-tertiary)" }}>
-                  ...
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {/* プログレスバー */}
+      <div style={{ fontSize:17, fontWeight:700 }}>リスナーダッシュボード</div>
       <div style={{ width:"min(280px,80vw)", height:6, background:"var(--color-border-tertiary)", borderRadius:3, overflow:"hidden" }}>
         <div style={{ width:`${pct}%`, height:"100%", background:"#185FA5", borderRadius:3,
           transition:"width 0.4s ease" }} />
       </div>
-      <div style={{ fontSize:11, color:"var(--color-text-tertiary)" }}>{message||""}</div>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }
@@ -388,7 +354,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
 }
 
 // ── PlayerCard ────────────────────────────────────────────
-function PlayerCard({ player, isAdmin, highlight, selected, dragging,
+const PlayerCard = React.memo(function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   onLongPress, onTap, onDragStart, onDragMove, onDragEnd, prevListenerName }) {
   const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon, player.statusSoon);
   const pressTimer = useRef(null);
@@ -461,7 +427,14 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
       )}
     </div>
   );
-}
+}, (prev, next) =>
+  prev.player === next.player &&
+  prev.highlight === next.highlight &&
+  prev.selected === next.selected &&
+  prev.dragging === next.dragging &&
+  prev.prevListenerName === next.prevListenerName &&
+  prev.isAdmin === next.isAdmin
+);
 
 // ── ListenerHeader（長押しドラッグで列並び替え） ──────────
 function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
@@ -545,7 +518,7 @@ function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
 }
 
 // ── ListenerColumn ────────────────────────────────────────
-function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSelectPlayer,
+const ListenerColumn = React.memo(function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSelectPlayer,
   onEditPlayer, onAddPlayer, onMoveTo, highlightLid, highlightPid,
   dragOverLid, dragPid, dragOverPid, dragOverPos, onDragStart, onDragMove, onDragEnd,
   isListenerDragging, isListenerDragOver, onListenerDragStart, onListenerDragMove, onListenerDragEnd,
@@ -867,7 +840,23 @@ function HistoryPage({ retired, listeners, onRestore, onDelete, onClose, isAdmin
       </div>
     </div>
   );
-}
+}, (prev, next) =>
+  prev.players === next.players &&
+  prev.listener === next.listener &&
+  prev.maxLoad === next.maxLoad &&
+  prev.isAdmin === next.isAdmin &&
+  prev.selectedPid === next.selectedPid &&
+  prev.dragPid === next.dragPid &&
+  prev.dragOverLid === next.dragOverLid &&
+  prev.dragOverPid === next.dragOverPid &&
+  prev.dragOverPos === next.dragOverPos &&
+  prev.highlightLid === next.highlightLid &&
+  prev.highlightPid === next.highlightPid &&
+  prev.ageSoonPid === next.ageSoonPid &&
+  prev.listenerDragId === next.listenerDragId &&
+  prev.listenerOverId === next.listenerOverId &&
+  prev.freqFilter === next.freqFilter
+);
 
 // ── App ───────────────────────────────────────────────────
 function App() {
@@ -885,6 +874,9 @@ function App() {
 
   // ダッシュボード状態
   const [boardTab,     setBoardTab]     = useState("youth");
+  // 案A: ボードのスクロール位置保持
+  const boardScrollRef = React.useRef(null);
+  const scrollXRef     = React.useRef(0);
   const [freqFilter,   setFreqFilter]   = useState("all");
   const [showFreqFilter,setShowFreqFilter] = useState(false);
   const [isAdmin,      setIsAdmin]      = useState(false);
@@ -1029,6 +1021,15 @@ function App() {
 
   useEffect(()=>{ loadData(false); }, []);
 
+  // 案A: 再レンダリング後にスクロール位置を復元（ボード表示中のみ）
+  const { useLayoutEffect } = React;
+  useLayoutEffect(() => {
+    const el = boardScrollRef.current;
+    if (el && scrollXRef.current > 0) {
+      el.scrollLeft = scrollXRef.current;
+    }
+  });
+
   // 7分ごとに自動リロード（管理者モード中はスキップ）
   useEffect(()=>{
     const timer = setInterval(async ()=>{
@@ -1057,7 +1058,7 @@ function App() {
           await apiPost(pin, "saveRetired", { retired: newRetired });
         }
         await flushChangeLog(pin); // 変更履歴を一括送信
-        setSaveMsg("✓ 保存しました");
+        setSaveMsg("✓ 保存済");
         setTimeout(()=>setSaveMsg(""), 2000);
       } catch(e) {
         setSaveMsg("⚠ 保存エラー: " + e.message);
@@ -1468,13 +1469,13 @@ function App() {
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-              <span style={{ fontSize:16, fontWeight:700 }}>Listener Dashboard</span>
+              <span style={{ fontSize:16, fontWeight:700 }}>リスナーダッシュボード</span>
               {isAdmin&&<span style={{ fontSize:10, padding:"2px 7px", borderRadius:20, background:"#E53935", color:"#fff", fontWeight:600 }}>✏ 編集中</span>}
             </div>
             <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginTop:2 }}>
               📅 {todayStr()}　{periodLabel}
-              {saveMsg&&<span style={{ marginLeft:8, color:saveMsg.startsWith("✓")?"#639922":"#C00000", fontWeight:600 }}>{saveMsg}</span>}
-              {saving&&<span style={{ marginLeft:8, color:"#185FA5" }}>保存中...</span>}
+              {saveMsg&&<span style={{ marginLeft:8, color:saveMsg.startsWith("✓")?"#639922":"#C00000", fontWeight:600, whiteSpace:"nowrap" }}>{saveMsg}</span>}
+              {saving&&<span style={{ marginLeft:8, color:"#185FA5", whiteSpace:"nowrap" }}>保存中...</span>}
             </div>
           </div>
           <div style={{ display:"flex", gap:8, alignItems:"center", flexShrink:0 }}>
@@ -1838,19 +1839,26 @@ function App() {
           {isAdmin && <CollapsiblePin pin={pin} onChangePass={p=>setPin(p)} />}
         </div>
       ):(
-        <div style={{ display:"flex", gap:4, overflowX:"auto", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
+        <div ref={boardScrollRef}
+          onScroll={e=>{ scrollXRef.current = e.currentTarget.scrollLeft; }}
+          style={{ display:"flex", gap:4, overflowX:"auto", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
           {boardListeners.map(l=>{
             // 通常プレイヤー（産休・育休以外）＋頻度フィルター適用
             let shown=boardPlayers.filter(p=>p.lid===l.id);
-            if(freqFilter==="new")        shown=shown.filter(p=>p.status==="new"&&!p.statusSoon);
-            if(freqFilter==="statusSoon") shown=shown.filter(p=>p.statusSoon===true);
+            const isUniv = p => p.joinType==="newgrad_university"||p.joinType==="newgrad";
+            // 2週/1回：大卒新卒（newgrad_university/旧newgrad）かつ3年未満
+            if(freqFilter==="new")        shown=shown.filter(p=>p.status==="new"&&!p.statusSoon&&isUniv(p));
+            // 2週→切替予定：大卒新卒かつstatusSoon
+            if(freqFilter==="statusSoon") shown=shown.filter(p=>p.statusSoon===true&&isUniv(p));
+            // 2ヶ月→切替予定（45歳以上）
             if(freqFilter==="ageSoon")    shown=shown.filter(p=>p.ageSoon===true);
-            if(freqFilter==="normal")     shown=shown.filter(p=>p.status!=="new"&&!p.ageSoon);
+            // 2ヶ月/1回（通常）：status=normal または 高卒・中途の3年未満（同頻度）
+            if(freqFilter==="normal")     shown=shown.filter(p=>(p.status!=="new"&&!p.ageSoon)||(p.status==="new"&&!p.statusSoon&&!isUniv(p)));
             // 産休・育休プレイヤーは頻度フィルターに関わらず常に表示
             const maternityShown = players.filter(p=>p.status==="maternity" && p.lid===l.id);
             shown = [...shown, ...maternityShown];
             return (
-              <ListenerColumn key={l.id+"_"+boardTab} listener={l} players={shown} maxLoad={maxLoad}
+              <ListenerColumn key={l.id+"_"+boardTab} listener={l} players={shown} maxLoad={maxLoad} freqFilter={freqFilter}
                 isAdmin={isAdmin} selectedPid={selectedPid}
                 onSelectPlayer={pid=>setSelectedPid(prev=>prev===pid?null:pid)}
                 onEditPlayer={p=>setEditPlayer(p)} onAddPlayer={lid=>setAddForLid(lid)}
