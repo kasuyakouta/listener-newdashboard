@@ -464,7 +464,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
 }
 
 // ── ListenerHeader（長押しドラッグで列並び替え） ──────────
-function ListenerHeader({ listener, isAdmin, isHighlight, isDragTarget, isListenerDragging,
+function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
   isListenerDragOver, selectedPid, dragPid, showDetail, setShowDetail,
   onListenerDragStart, onListenerDragMove, onListenerDragEnd,
   activeLoad, pct, isWarn, players }) {
@@ -504,12 +504,8 @@ function ListenerHeader({ listener, isAdmin, isHighlight, isDragTarget, isListen
   };
 
   const isDraggingThis = isListenerDragging;
-  const outline = isHighlight ? "3px solid #FFD700"
-    : isDragTarget ? "3px solid #00CFFF"
-    : isListenerDragOver ? "3px solid #FF6B35" : "none";
-  const shadow = isHighlight ? "0 0 12px rgba(255,215,0,0.7)"
-    : isDragTarget ? "0 0 14px rgba(0,207,255,0.7)"
-    : isListenerDragOver ? "0 0 14px rgba(255,107,53,0.6)" : "none";
+  // 案C: リスナー列のハイライトを廃止（レイアウトずれ防止）
+  // ドラッグターゲットの視覚フィードバックはプレイヤーカード間のシアンラインのみ使用
 
   return (
     <div
@@ -521,13 +517,11 @@ function ListenerHeader({ listener, isAdmin, isHighlight, isDragTarget, isListen
       style={{ borderRadius:8, padding:"6px 8px", textAlign:"center",
         background: listener.bg || listener.color,
         border: `1.5px solid ${listener.color}`,
-        outline, outlineOffset: outline!=="none" ? 2 : 0,
-        boxShadow: shadow,
         cursor: isAdmin ? (isDraggingThis?"grabbing":"grab") : "pointer",
         userSelect:"none", touchAction:"none",
         opacity: isDraggingThis ? 0.6 : 1,
         transform: isDraggingThis ? "scale(1.05)" : "scale(1)",
-        transition:"opacity 0.15s, transform 0.15s, box-shadow 0.2s" }}>
+        transition:"opacity 0.15s, transform 0.15s" }}>
       <div style={{ fontSize:11, fontWeight:700, color:listener.color }}>
         {listener.name}{isWarn&&!showDetail?" ⚠":""}
         {isAdmin && !selectedPid && !dragPid && (
@@ -579,7 +573,6 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
       <ListenerHeader
         listener={listener}
         isAdmin={isAdmin}
-        isHighlight={isHighlight}
         isDragTarget={isDragTarget}
         isListenerDragging={isListenerDragging}
         isListenerDragOver={isListenerDragOver}
