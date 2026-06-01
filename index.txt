@@ -46,7 +46,7 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbxFC4C64yrWx-vKq7cyV_kx
 
 // ── 定数 ──────────────────────────────────────────────────
 const TODAY      = new Date();
-const LOAD_WARN  = 80;
+const LOAD_WARN  = 100; // 年100回以上で警告
 const PREV_DAYS  = 60;
 const PREV_LID_START_DATE = new Date("2026-06-01"); // 前任記録開始日
 
@@ -371,7 +371,9 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   const pressOrigin= useRef(null);
   const didDrag    = useRef(false);
   const [pressing, setPressing] = useState(false);
-  const LONG_MS = 900, DRAG_PX = 8;
+  const [showPrev, setShowPrev] = useState(false); // ② 前任者表示トグル
+  const lastTap = useRef(0); // ダブルタップ検出用
+  const LONG_MS = 900, DRAG_PX = 8, DBL_MS = 300;
 
   const handlePointerDown = e => {
     if (!isAdmin) return;
@@ -415,7 +417,19 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   return (
     <div onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}
-      onClick={(e)=>{ if(!isAdmin) return; if(!didDrag.current) { e.stopPropagation(); onTap&&onTap(); } }}
+      onClick={(e)=>{
+        if(didDrag.current) return;
+        const now = Date.now();
+        const isDouble = now - lastTap.current < DBL_MS;
+        lastTap.current = now;
+        if(isDouble) {
+          // ダブルタップ：前任者表示トグル
+          if(prevListenerName) setShowPrev(s=>!s);
+          return;
+        }
+        if(!isAdmin) return;
+        e.stopPropagation(); onTap&&onTap();
+      }}
       style={{ background:cs.bg, border:`${borderWidth} ${(selected||highlight)?"solid":(cs.borderStyle||"solid")} ${borderColor}`,
         borderRadius:7, padding:"5px 7px",
         cursor:isAdmin?(pressing?"grabbing":"pointer"):"default",
@@ -439,8 +453,10 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
       {player.status==="maternity" && (
         <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>産休・育休中</div>
       )}
-      {prevListenerName && (
-        <div style={{ fontSize:8, color:"var(--color-text-tertiary)", marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+      {prevListenerName && showPrev && (
+        <div style={{ fontSize:8, color:"var(--color-text-tertiary)", marginTop:1,
+          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+          animation:"fadeIn 0.2s ease" }}>
           前：{prevListenerName}
         </div>
       )}
