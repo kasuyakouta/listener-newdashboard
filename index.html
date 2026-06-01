@@ -13,17 +13,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <meta name="robots" content="noindex, nofollow" />
   <!-- v2026-06-01-A -->
-  <!-- PWA 設定 -->
-  <link rel="manifest" href="manifest.json"/>
-  <meta name="theme-color" content="#f5f5f7"/>
-  <meta name="mobile-web-app-capable" content="yes"/>
-  <meta name="apple-mobile-web-app-capable" content="yes"/>
-  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
-  <meta name="apple-mobile-web-app-title" content="面談リスナー"/>
-  <link rel="apple-touch-icon" href="icons/icon-180.png"/>
-  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"/>
-  <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png"/>
-  <title>面談リスナー</title>
+  <title>リスナーダッシュボード</title>
+  <!-- v20260601-A -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -56,7 +47,7 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbxFC4C64yrWx-vKq7cyV_kx
 
 // ── 定数 ──────────────────────────────────────────────────
 const TODAY      = new Date();
-const LOAD_WARN  = 80;
+const LOAD_WARN  = 100; // 年100回以上で警告
 const PREV_DAYS  = 60;
 const PREV_LID_START_DATE = new Date("2026-06-01"); // 前任記録開始日
 
@@ -67,7 +58,7 @@ const periodLabel = TODAY.getMonth() < 6 ? "前期（1〜6月）" : "後期（7�
 
 // ── GAS API ──────────────────────────────────────────────
 // ── キャッシュキー ───────────────────────────────────────
-const CACHE_KEY     = "listenerDashboard_v2_cache"; // v2: localStorage移行
+const CACHE_KEY     = "listenerDashboard_v3_cache"; // v3: 前任者表示削除
 const CACHE_MAX_AGE = 6 * 60 * 60 * 1000; // 案A: 6時間（タブを閉じても保持）
 
 function saveCache(data) {
@@ -375,7 +366,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
 
 // ── PlayerCard ────────────────────────────────────────────
 function PlayerCard({ player, isAdmin, highlight, selected, dragging,
-  onLongPress, onTap, onDragStart, onDragMove, onDragEnd, prevListenerName }) {
+  onLongPress, onTap, onDragStart, onDragMove, onDragEnd }) {
   const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon, player.statusSoon);
   const pressTimer = useRef(null);
   const pressOrigin= useRef(null);
@@ -394,7 +385,16 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   const handlePointerMove = e => {
     if (!pressOrigin.current||!isAdmin) return;
     const dx=e.clientX-pressOrigin.current.x, dy=e.clientY-pressOrigin.current.y;
-    if (Math.sqrt(dx*dx+dy*dy)>DRAG_PX) {
+    const dist=Math.sqrt(dx*dx+dy*dy);
+    if (dist>DRAG_PX) {
+      // 案B: 水平移動が縦移動より大きい場合はボードの横スクロールに委譲
+      if (!didDrag.current && Math.abs(dx) > Math.abs(dy)) {
+        clearTimeout(pressTimer.current); pressTimer.current=null;
+        setPressing(false); pressOrigin.current=null;
+        // ポインターキャプチャを解放してブラウザのネイティブスクロールを有効化
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(_) {}
+        return;
+      }
       if (!didDrag.current) {
         didDrag.current=true;
         if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
@@ -423,7 +423,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
         transform:pressing&&!didDrag.current?"scale(1.04)":selected?"scale(1.02)":"scale(1)",
         boxShadow:selected?"0 0 12px rgba(255,215,0,0.8)":highlight?"0 0 8px rgba(255,215,0,0.6)":"none",
         opacity:dragging?0.35:1, transition:"transform 0.12s, box-shadow 0.2s, opacity 0.15s",
-        userSelect:"none", WebkitUserSelect:"none", touchAction:"none" }}>
+        userSelect:"none", WebkitUserSelect:"none", touchAction:"pan-x" }}>
       <div style={{ display:"flex", alignItems:"center", gap:2 }}>
         <span style={{ fontSize:player.name.length>=7?9:player.name.length>=5?10:11,
           fontWeight:500, color:"var(--color-text-primary)", display:"block",
@@ -439,11 +439,6 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
       </div>
       {player.status==="maternity" && (
         <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>産休・育休中</div>
-      )}
-      {prevListenerName && (
-        <div style={{ fontSize:8, color:"var(--color-text-tertiary)", marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-          前：{prevListenerName}
-        </div>
       )}
     </div>
   );
@@ -579,7 +574,6 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
           )}
           <PlayerCard player={p} isAdmin={isAdmin}
             highlight={highlightPid===p.id} selected={selectedPid===p.id} dragging={dragPid===p.id}
-            prevListenerName={p.prevLid?(listeners||[]).find(l=>l.id===p.prevLid)?.name||null:null}
             onLongPress={()=>onSelectPlayer(p.id)}
             onTap={()=>{
               if(selectedPid===p.id) { onEditPlayer(p); return; }
@@ -1831,7 +1825,7 @@ function App() {
       ):(
         <div ref={boardScrollRef}
           onScroll={e=>{ scrollXRef.current = e.currentTarget.scrollLeft; }}
-          style={{ display:"flex", gap:4, overflowX:"auto", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
+          style={{ display:"flex", gap:4, overflowX:"auto", WebkitOverflowScrolling:"touch", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
           {boardListeners.map(l=>{
             // 通常プレイヤー（産休・育休以外）＋頻度フィルター適用
             let shown=boardPlayers.filter(p=>p.lid===l.id);
@@ -2042,12 +2036,5 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   <ErrorBoundary><App /></ErrorBoundary>
 );
 </script>
-  <script>
-    if('serviceWorker' in navigator){
-      window.addEventListener('load', function(){
-        navigator.serviceWorker.register('./sw.js').catch(function(){});
-      });
-    }
-  </script>
 </body>
 </html>
