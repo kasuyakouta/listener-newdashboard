@@ -1,0 +1,2045 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <!-- 案B: CDN接続を先行確立してBabel/React読み込みを高速化 -->
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" />
+  <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com" />
+  <link rel="preconnect" href="https://script.google.com" />
+  <link rel="dns-prefetch" href="https://script.google.com" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <!-- v2026-06-01-A -->
+  <title>リスナーダッシュボード</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           background: #f5f5f7; color: #1c1c1e; }
+    :root {
+      --color-background-primary: #ffffff;
+      --color-background-secondary: #f2f2f7;
+      --color-text-primary: #1c1c1e;
+      --color-text-secondary: #6e6e73;
+      --color-text-tertiary: #aeaeb2;
+      --color-border-secondary: #c6c6c8;
+      --color-border-tertiary: #e5e5ea;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    input, select, button { font-family: inherit; }
+    button:active { opacity: 0.75; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ── GAS設定 ──────────────────────────────────────────────
+const GAS_URL = "https://script.google.com/macros/s/AKfycbxFC4C64yrWx-vKq7cyV_kxOsuYpUTN3hKhbK_J-vFA9DY8fvkR-ggp7bn-NhvUoo_Fdg/exec";
+
+// ── 定数 ──────────────────────────────────────────────────
+const TODAY      = new Date();
+const LOAD_WARN  = 80;
+const PREV_DAYS  = 60;
+const PREV_LID_START_DATE = new Date("2026-06-01"); // 前任記録開始日
+
+function todayStr() {
+  return `${TODAY.getFullYear()}年${TODAY.getMonth()+1}月${TODAY.getDate()}日（${"日月火水木金土"[TODAY.getDay()]}）`;
+}
+const periodLabel = TODAY.getMonth() < 6 ? "前期（1〜6月）" : "後期（7〜12月）";
+
+// ── GAS API ──────────────────────────────────────────────
+// ── キャッシュキー ───────────────────────────────────────
+const CACHE_KEY     = "listenerDashboard_v2_cache"; // v2: localStorage移行
+const CACHE_MAX_AGE = 6 * 60 * 60 * 1000; // 案A: 6時間（タブを閉じても保持）
+
+function saveCache(data) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      timestamp: Date.now(),
+      data,
+    }));
+  } catch(e) { /* localStorage 使用不可の場合は無視 */ }
+}
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const { timestamp, data } = JSON.parse(raw);
+    if (Date.now() - timestamp > CACHE_MAX_AGE) return null; // 6時間超は破棄
+    // キャッシュバリデーション: 必須フィールドの確認
+    if (!data || !Array.isArray(data.players) || !Array.isArray(data.listeners)) return null;
+    if (data.players.length > 0 && data.players[0].ageGroup === undefined) return null; // 古いキャッシュを破棄
+    return data;
+  } catch(e) { return null; }
+}
+
+// 案A: キャッシュを手動クリアする関数（デバッグ用）
+function clearCache() {
+  try { localStorage.removeItem(CACHE_KEY); } catch(e) {}
+}
+
+// ── GASウォームアップ（レスポンスを待たない） ─────────────
+function warmupGAS() {
+  fetch(`${GAS_URL}?pin=warmup`, { redirect:"follow" }).catch(()=>{});
+}
+
+async function apiGet(pin) {
+  const res = await fetch(`${GAS_URL}?pin=${encodeURIComponent(pin)}`, { redirect:"follow" });
+  let json;
+  try { json = await res.json(); }
+  catch(e) { throw new Error("サーバーからの応答が不正です（ネットワークエラーの可能性）"); }
+  if (json.status === "error") throw new Error(json.message);
+  return json.data;
+}
+
+async function apiPost(pin, action, payload = {}) {
+  const body = JSON.stringify({ pin, action, ...payload });
+  const res  = await fetch(GAS_URL, { method:"POST", body, redirect:"follow" });
+  let json;
+  try { json = await res.json(); }
+  catch(e) { throw new Error("保存応答が不正です（ネットワークエラーの可能性）"); }
+  if (json.status === "error") throw new Error(json.message);
+  return json.data;
+}
+
+// ── 面談頻度 ──────────────────────────────────────────────
+// ageGroup: "A"=44歳以下, "B"=45歳以上
+function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
+  if (status === "new") {
+    const isUniv = joinType === "newgrad_university" || joinType === "newgrad"; // 大卒（旧newgrad互換）
+    if (isUniv) {
+      // 【大卒新卒】3年未満：2週/1回
+      if (statusSoon) return { freq:24, label:"2週/1回→切替予定",    bg:"#FFEDE0", color:"#C0501A" };
+      return               { freq:24, label:"2週/1回（大卒新卒）",   bg:"#FAECE7", color:"#993C1D" };
+    } else {
+      // 【高卒新卒・中途】3年未満：2ヶ月/1回（年齢に関わらず）
+      if (statusSoon && ageGroup === "B")
+        return             { freq:6,  label:"2ヶ月→4ヶ月 切替予定",  bg:"#FFF8E1", color:"#B8860B" };
+      const lbl = joinType === "newgrad_highschool" ? "2ヶ月/1回（高卒新卒）" : "2ヶ月/1回（中途新人）";
+      return               { freq:6,  label:lbl,                    bg:"#EAF3DE", color:"#3B6D11" };
+    }
+  }
+  // status="normal" のみ
+  if (ageGroup === "B") return { freq:3, label:"4ヶ月/1回（通常）",    bg:"#E6F1FB", color:"#185FA5" };
+  if (ageSoon)          return { freq:6, label:"2ヶ月/1回→切替予定",  bg:"#FFF8E1", color:"#B8860B" };
+  return                       { freq:6, label:"2ヶ月/1回（通常）",   bg:"#EAF3DE", color:"#3B6D11" };
+}
+
+// borderStyle: "solid"=通常, "dashed"=新人切替予定(大破線), "dotted"=44歳切替予定(細点線)
+function freqCardStyle(status, ageGroup, joinType, ageSoon, statusSoon) {
+  if (status === "maternity") return { bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid" };
+  if (status === "new") {
+    const isUniv = joinType === "newgrad_university" || joinType === "newgrad"; // 大卒（旧newgrad互換）
+    if (isUniv) {
+      // 【大卒新卒】薄オレンジ
+      if (statusSoon) return { bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed" }; // 薄サーモン破線：切替予定
+      return                 { bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid"  }; // 薄オレンジ：2週/1回
+    } else {
+      // 【高卒新卒・中途】薄グリーン（通常と同色）
+      if (statusSoon && ageGroup === "B") return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" }; // 薄黄色点線：4ヶ月切替予定
+      if (statusSoon)                     return { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"dotted" }; // 薄グリーン点線：切替間近
+      return                                     { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid"  }; // 薄グリーン：通常と同じ
+    }
+  }
+  // status="normal" のみ
+  if (ageGroup === "B") return { bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid"  };
+  if (ageSoon)          return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" };
+  return                       { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid"  };
+}
+
+function formatDate(d) {
+  if (!d) return "—";
+  return String(d).replace(/-/g,"/");
+}
+
+// ── ローディング画面 ──────────────────────────────────────
+function LoadingScreen({ message, step, total }) {
+  const pct = total > 0 ? Math.round((step / total) * 100) : 30;
+  return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+      minHeight:"100vh", background:"var(--color-background-primary)", gap:24, padding:32 }}>
+      <div style={{ fontSize:40 }}>📋</div>
+      <div style={{ fontSize:17, fontWeight:700 }}>リスナーダッシュボード</div>
+      <div style={{ width:"min(280px,80vw)", height:6, background:"var(--color-border-tertiary)", borderRadius:3, overflow:"hidden" }}>
+        <div style={{ width:`${pct}%`, height:"100%", background:"#185FA5", borderRadius:3,
+          transition:"width 0.4s ease" }} />
+      </div>
+    </div>
+  );
+}
+
+// ── PINログイン画面 ───────────────────────────────────────
+function PinScreen({ onSuccess, onCancel, title }) {
+  const [pin, setPin]       = useState("");
+  const [error, setError]   = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handlePin = async (digit) => {
+    const next = pin + digit;
+    if (next.length > 4) return;
+    setPin(next);
+    setError(false);
+    if (next.length === 4) {
+      setLoading(true);
+      try {
+        await apiPost(next, "verifyPin");
+        setPin(""); setLoading(false);
+        onSuccess(next);
+      } catch(e) {
+        setError(true); setLoading(false);
+        setTimeout(() => { setPin(""); setError(false); }, 800);
+      }
+    }
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+      minHeight:"100vh", background:"var(--color-background-primary)", padding:24, position:"relative" }}>
+      {onCancel && (
+        <button onClick={onCancel}
+          style={{ position:"absolute", top:20, right:20, fontSize:22, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-secondary)" }}>✕</button>
+      )}
+      <div style={{ fontSize:16, fontWeight:600, marginBottom:8 }}>{title || "管理者モード"}</div>
+      <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:32 }}>PINを入力してください</div>
+      <div style={{ display:"flex", gap:16, marginBottom:12 }}>
+        {[0,1,2,3].map(i=>(
+          <div key={i} style={{ width:18, height:18, borderRadius:"50%",
+            background: i<pin.length ? (error?"#C00000":"#185FA5") : "var(--color-border-secondary)",
+            transition:"background 0.15s" }} />
+        ))}
+      </div>
+      <div style={{ fontSize:12, color:"#C00000", height:18, marginBottom:20, fontWeight:500 }}>
+        {loading ? "認証中..." : error ? "PINが違います" : ""}
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, width:240 }}>
+        {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((k,i)=>(
+          <button key={i} onClick={()=>{ if(k==="⌫") { setPin(p=>p.slice(0,-1)); setError(false); }
+            else if(k!=="") handlePin(String(k)); }}
+            disabled={loading}
+            style={{ height:68, borderRadius:14, fontSize:k==="⌫"?22:24, fontWeight:500,
+              border:"none", cursor:k===""?"default":"pointer",
+              background:k===""?"transparent":"var(--color-background-secondary)",
+              color:k===""?"transparent":"var(--color-text-primary)",
+              boxShadow:k===""?"none":"0 1px 3px rgba(0,0,0,0.1)", userSelect:"none" }}>{k}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── SettingsTab ───────────────────────────────────────────
+function SettingsTab({ pin, onChangePass }) {
+  const [cur, setCur]   = useState("");
+  const [nw,  setNw]    = useState("");
+  const [conf,setConf]  = useState("");
+  const [msg, setMsg]   = useState({ text:"", ok:true });
+  const inp = { fontSize:14, padding:"9px 12px", borderRadius:9,
+    border:"0.5px solid var(--color-border-secondary)",
+    background:"var(--color-background-primary)", color:"var(--color-text-primary)",
+    width:"100%", boxSizing:"border-box" };
+
+  const handle = async () => {
+    if (cur !== pin) { setMsg({ text:"現在のPINが違います", ok:false }); return; }
+    if (nw.length < 4) { setMsg({ text:"4桁以上で設定してください", ok:false }); return; }
+    if (nw !== conf) { setMsg({ text:"新しいPINが一致しません", ok:false }); return; }
+    try {
+      await apiPost(pin, "changePass", { newPass: nw });
+      onChangePass(nw);
+      setCur(""); setNw(""); setConf("");
+      setMsg({ text:"PINを変更しました", ok:true });
+      setTimeout(()=>setMsg({ text:"", ok:true }), 2500);
+    } catch(e) {
+      setMsg({ text:"変更に失敗しました: " + e.message, ok:false });
+    }
+  };
+
+  return (
+    <div style={{ padding:"20px 16px" }}>
+      <div style={{ fontSize:14, fontWeight:600, marginBottom:16 }}>PIN変更</div>
+      {[["現在のPIN",cur,setCur],["新しいPIN",nw,setNw],["新しいPIN（確認）",conf,setConf]].map(([label,val,set])=>(
+        <div key={label} style={{ marginBottom:12 }}>
+          <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:4 }}>{label}</div>
+          <input type="password" value={val} onChange={e=>set(e.target.value)} style={{ ...inp, letterSpacing:4 }} />
+        </div>
+      ))}
+      {msg.text && <div style={{ fontSize:12, color:msg.ok?"#639922":"#C00000", marginBottom:12, fontWeight:500 }}>
+        {msg.ok?"✓ ":"✗ "}{msg.text}</div>}
+      <button onClick={handle}
+        style={{ width:"100%", fontSize:14, padding:11, borderRadius:10, border:"none",
+          background:"#185FA5", color:"#fff", cursor:"pointer", fontWeight:600 }}>変更する</button>
+    </div>
+  );
+}
+
+// ── CollapsiblePin（PIN変更折りたたみ）──────────────────────
+function CollapsiblePin({ pin, onChangePass }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+      <button onClick={()=>setOpen(o=>!o)}
+        style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%",
+          background:"none", border:"none", cursor:"pointer", padding:0, marginBottom: open ? 12 : 0 }}>
+        <span style={{ fontSize:13, fontWeight:600 }}>⚙ PIN変更</span>
+        <span style={{ fontSize:13, color:"var(--color-text-tertiary)", transition:"transform 0.2s",
+          transform: open ? "rotate(180deg)" : "rotate(0deg)", display:"inline-block" }}>▼</span>
+      </button>
+      {open && <SettingsTab pin={pin} onChangePass={p=>{ onChangePass(p); setOpen(false); }} />}
+    </div>
+  );
+}
+
+// ── Toast通知 ─────────────────────────────────────────────
+function Toast({ message, visible }) {
+  if (!visible || !message) return null;
+  return (
+    <div style={{ position:"fixed", bottom:88, left:"50%", transform:"translateX(-50%)",
+      background:"rgba(20,20,20,0.88)", color:"#fff", padding:"10px 22px",
+      borderRadius:20, fontSize:13, fontWeight:600, zIndex:9999,
+      whiteSpace:"nowrap", pointerEvents:"none",
+      boxShadow:"0 4px 16px rgba(0,0,0,0.25)", letterSpacing:0.2 }}>
+      {message}
+    </div>
+  );
+}
+
+// ── AlertPanel ────────────────────────────────────────────
+function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
+  const visible = alerts.filter((_,i)=>!dismissed.includes(i));
+  if (visible.length===0) { onClose(); return null; }
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:400, background:"rgba(0,0,0,0.30)",
+      display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ width:"min(460px,92vw)", maxHeight:"80vh", background:"var(--color-background-primary)",
+        borderRadius:12, border:"0.5px solid var(--color-border-secondary)",
+        boxShadow:"0 8px 32px rgba(0,0,0,0.18)", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <div style={{ padding:"12px 16px", borderBottom:"0.5px solid var(--color-border-tertiary)",
+          display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <span style={{ fontSize:14, fontWeight:500 }}>📣 通知　<span style={{ fontSize:12, color:"var(--color-text-secondary)", fontWeight:400 }}>{visible.length}件</span></span>
+          <button onClick={onClose} style={{ fontSize:18, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-secondary)" }}>✕</button>
+        </div>
+        <div style={{ overflowY:"auto", padding:"10px 12px", display:"flex", flexDirection:"column", gap:8 }}>
+          {alerts.map((a,i)=>dismissed.includes(i)?null:(
+            <div key={i} style={{
+              background:a.type==="maternity"?"#EAF3FB":a.type==="board_mismatch"?"#FFF0E0":a.type==="career_mismatch"?"#EDF7ED":a.type==="career_switch"?"#FFFBE6":"#FFFBE6",
+              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="board_mismatch"?"#F5A623":a.type==="career_mismatch"?"#5C9E5C":a.type==="career_switch"?"#FFD93D":"#FFD93D"}`,
+              borderRadius:10, padding:"10px 14px 10px 12px", fontSize:12, position:"relative" }}>
+              <button onClick={()=>onDismiss(i)}
+                style={{ position:"absolute", top:6, right:8, fontSize:14, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-tertiary)" }}>✕</button>
+              <div style={{ fontWeight:600, marginBottom:4, paddingRight:20,
+                color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":a.type==="career_mismatch"?"#2E7D32":a.type==="career_switch"?"#B8860B":"#8A6800" }}>
+                {a.type==="maternity"?"🩵 産休・育休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":a.type==="career_switch"?"⚡ 中途3年経過→4ヶ月切替予定":"⚠ その他通知"}
+              </div>
+              <div style={{ color:"var(--color-text-primary)", lineHeight:1.5, marginBottom: a.type==="board_mismatch"?10:0 }}>{a.message}</div>
+              {(a.type==="board_mismatch" || a.type==="career_mismatch") && onApprove && a.pid && (
+                <div style={{ display:"flex", gap:8, marginTop:4 }}>
+                  <button onClick={()=>{ onApprove(a.pid); onDismiss(i); }}
+                    style={{ fontSize:12, padding:"5px 12px", borderRadius:8, border:"none",
+                      background:"#639922", color:"#fff", cursor:"pointer", fontWeight:600 }}>
+                    ✓ このまま承認
+                  </button>
+                  <span style={{ fontSize:11, color:"var(--color-text-tertiary)", alignSelf:"center" }}>
+                    次回から表示しない
+                  </span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{ padding:"10px 16px", borderTop:"0.5px solid var(--color-border-tertiary)", display:"flex", justifyContent:"flex-end" }}>
+          <button onClick={onClose}
+            style={{ fontSize:12, padding:"5px 16px", borderRadius:7, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>すべて閉じる</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PlayerCard ────────────────────────────────────────────
+function PlayerCard({ player, isAdmin, highlight, selected, dragging,
+  onLongPress, onTap, onDragStart, onDragMove, onDragEnd, prevListenerName }) {
+  const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon, player.statusSoon);
+  const pressTimer = useRef(null);
+  const pressOrigin= useRef(null);
+  const didDrag    = useRef(false);
+  const [pressing, setPressing] = useState(false);
+  const LONG_MS = 900, DRAG_PX = 8;
+
+  const handlePointerDown = e => {
+    if (!isAdmin) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pressOrigin.current = { x:e.clientX, y:e.clientY };
+    didDrag.current = false;
+    setPressing(true);
+    pressTimer.current = setTimeout(()=>{ onLongPress && onLongPress(); }, LONG_MS);
+  };
+  const handlePointerMove = e => {
+    if (!pressOrigin.current||!isAdmin) return;
+    const dx=e.clientX-pressOrigin.current.x, dy=e.clientY-pressOrigin.current.y;
+    const dist=Math.sqrt(dx*dx+dy*dy);
+    if (dist>DRAG_PX) {
+      // 案B: 水平移動が縦移動より大きい場合はボードの横スクロールに委譲
+      if (!didDrag.current && Math.abs(dx) > Math.abs(dy)) {
+        clearTimeout(pressTimer.current); pressTimer.current=null;
+        setPressing(false); pressOrigin.current=null;
+        // ポインターキャプチャを解放してブラウザのネイティブスクロールを有効化
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(_) {}
+        return;
+      }
+      if (!didDrag.current) {
+        didDrag.current=true;
+        if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
+        onDragStart && onDragStart(player.id, e.clientX, e.clientY);
+      }
+      onDragMove && onDragMove(e.clientX, e.clientY);
+    }
+  };
+  const handlePointerUp = e => {
+    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
+    setPressing(false);
+    if (didDrag.current) { onDragEnd && onDragEnd(e.clientX, e.clientY); didDrag.current=false; }
+    pressOrigin.current=null;
+  };
+
+  const borderColor = selected?"#FFD700":highlight?"#FFD700":cs.border;
+  const borderWidth = (selected||highlight)?"2px":"0.5px";
+
+  return (
+    <div onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}
+      onClick={(e)=>{ if(!isAdmin) return; if(!didDrag.current) { e.stopPropagation(); onTap&&onTap(); } }}
+      style={{ background:cs.bg, border:`${borderWidth} ${(selected||highlight)?"solid":(cs.borderStyle||"solid")} ${borderColor}`,
+        borderRadius:7, padding:"5px 7px",
+        cursor:isAdmin?(pressing?"grabbing":"pointer"):"default",
+        transform:pressing&&!didDrag.current?"scale(1.04)":selected?"scale(1.02)":"scale(1)",
+        boxShadow:selected?"0 0 12px rgba(255,215,0,0.8)":highlight?"0 0 8px rgba(255,215,0,0.6)":"none",
+        opacity:dragging?0.35:1, transition:"transform 0.12s, box-shadow 0.2s, opacity 0.15s",
+        userSelect:"none", WebkitUserSelect:"none", touchAction:"pan-x" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:2 }}>
+        <span style={{ fontSize:player.name.length>=7?9:player.name.length>=5?10:11,
+          fontWeight:500, color:"var(--color-text-primary)", display:"block",
+          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1, minWidth:0 }}>
+          {player.name}
+        </span>
+        {(
+          (player.ageSoon && player.status!=="new" && player.ageGroup!=="B") || // 44歳→45歳切替予定
+          (player.statusSoon && player.joinType==="career" && player.ageGroup==="B") // 中途3年経過→4ヶ月切替予定
+        ) && (
+          <span style={{ fontSize:8, flexShrink:0, lineHeight:1 }} title="次期切替予定">⚡</span>
+        )}
+      </div>
+      {player.status==="maternity" && (
+        <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>産休・育休中</div>
+      )}
+      {prevListenerName && (
+        <div style={{ fontSize:8, color:"var(--color-text-tertiary)", marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          前：{prevListenerName}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ListenerHeader（長押しドラッグで列並び替え） ──────────
+function ListenerHeader({ listener, isAdmin, isDragTarget, isListenerDragging,
+  isListenerDragOver, selectedPid, dragPid, showDetail, setShowDetail,
+  onListenerDragStart, onListenerDragMove, onListenerDragEnd,
+  activeLoad, pct, isWarn, players }) {
+  const pressTimer = useRef(null);
+  const pressOrigin = useRef(null);
+  const didDrag = useRef(false);
+  const LONG_MS = 800, DRAG_PX = 6;
+
+  const handlePointerDown = e => {
+    if (!isAdmin) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pressOrigin.current = { x:e.clientX, y:e.clientY };
+    didDrag.current = false;
+    pressTimer.current = setTimeout(()=>{
+      // 長押し → ドラッグ準備（カラムが少し浮く）
+      onListenerDragStart(listener.id, e.clientX, e.clientY);
+    }, LONG_MS);
+  };
+  const handlePointerMove = e => {
+    if (!pressOrigin.current) return;
+    const dx=e.clientX-pressOrigin.current.x, dy=e.clientY-pressOrigin.current.y;
+    if (Math.sqrt(dx*dx+dy*dy) > DRAG_PX) {
+      if (!didDrag.current) {
+        didDrag.current = true;
+        if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
+        onListenerDragStart(listener.id, e.clientX, e.clientY);
+      }
+      onListenerDragMove(e.clientX, e.clientY);
+    }
+  };
+  const handlePointerUp = e => {
+    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
+    if (didDrag.current) onListenerDragEnd(e.clientX, e.clientY);
+    else if (!didDrag.current && !selectedPid) setShowDetail(v=>!v);
+    didDrag.current = false;
+    pressOrigin.current = null;
+  };
+
+  const isDraggingThis = isListenerDragging;
+  // 案C: リスナー列のハイライトを廃止（レイアウトずれ防止）
+  // ドラッグターゲットの視覚フィードバックはプレイヤーカード間のシアンラインのみ使用
+
+  return (
+    <div
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onClick={e=>{ if(selectedPid) return; }}
+      style={{ borderRadius:8, padding:"6px 8px", textAlign:"center",
+        background: listener.bg || listener.color,
+        border: `1.5px solid ${listener.color}`,
+        cursor: isAdmin ? (isDraggingThis?"grabbing":"grab") : "pointer",
+        userSelect:"none", touchAction:"none",
+        opacity: isDraggingThis ? 0.6 : 1,
+        transform: isDraggingThis ? "scale(1.05)" : "scale(1)",
+        transition:"opacity 0.15s, transform 0.15s" }}>
+      <div style={{ fontSize:11, fontWeight:700, color:listener.color }}>
+        {listener.name}{isWarn&&!showDetail?" ⚠":""}
+        {isAdmin && !selectedPid && !dragPid && (
+          <span style={{ fontSize:8, color:listener.color, opacity:0.5, marginLeft:3 }}>⠿</span>
+        )}
+      </div>
+      <div style={{ fontSize:9, color:listener.color, opacity:0.7, marginTop:1 }}>{players.length}名</div>
+      {showDetail && (
+        <>
+          <div style={{ marginTop:5, background:`${listener.color}30`, borderRadius:4, height:4 }}>
+            <div style={{ width:`${pct}%`, height:4, borderRadius:4, background:isWarn?"#E53935":listener.color }} />
+          </div>
+          <div style={{ fontSize:11, fontWeight:600, marginTop:2, color:isWarn?"#E53935":listener.color }}>年{activeLoad}回</div>
+        </>
+      )}
+      {isAdmin&&isDraggingThis&&(
+        <div style={{ fontSize:9, color:listener.color, marginTop:2, fontWeight:700 }}>↔ 並び替え中</div>
+      )}
+    </div>
+  );
+}
+
+// ── ListenerColumn ────────────────────────────────────────
+function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSelectPlayer,
+  onEditPlayer, onAddPlayer, onMoveTo, highlightLid, highlightPid,
+  dragOverLid, dragPid, dragOverPid, dragOverPos, onDragStart, onDragMove, onDragEnd,
+  isListenerDragging, isListenerDragOver, onListenerDragStart, onListenerDragMove, onListenerDragEnd,
+  ageSoonPid, onAgeSoonSelect, seniorListeners, listeners }) {
+  const [showDetail, setShowDetail] = useState(false);
+  const isHighlight  = highlightLid===listener.id;
+  const isDragTarget = dragOverLid===listener.id;
+
+  const activeLoad  = players.filter(p=>p.status!=="maternity")
+    .reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon).freq, 0);
+
+  const pct    = maxLoad>0?Math.round((activeLoad/maxLoad)*100):0;
+  const isWarn = activeLoad>=LOAD_WARN;
+
+  return (
+    <div id={`listener-col-${listener.id}`} data-listener-id={listener.id}
+      style={{ minWidth:88, maxWidth:88, display:"flex", flexDirection:"column", gap:3 }}
+      onClick={(e)=>{
+        if(isAdmin&&selectedPid) { onMoveTo(listener.id); e.stopPropagation(); }
+      }}>
+      {/* リスナー列ヘッダー（管理者モードで長押しドラッグ可） */}
+      <ListenerHeader
+        listener={listener}
+        isAdmin={isAdmin}
+        isDragTarget={isDragTarget}
+        isListenerDragging={isListenerDragging}
+        isListenerDragOver={isListenerDragOver}
+        selectedPid={selectedPid}
+        dragPid={dragPid}
+        showDetail={showDetail}
+        setShowDetail={setShowDetail}
+        onListenerDragStart={onListenerDragStart}
+        onListenerDragMove={onListenerDragMove}
+        onListenerDragEnd={onListenerDragEnd}
+        activeLoad={activeLoad}
+        pct={pct}
+        isWarn={isWarn}
+        players={players}
+      />
+      {/* 以下は旧ヘッダーの内容をListenerHeaderに移動済み */}
+      {players.map(p=>(
+        <div key={p.id} id={`player-card-${p.id}`} data-player-id={p.id} style={{ position:"relative" }}>
+          {dragOverPid===p.id&&dragOverPos==="before"&&(
+            <div style={{ position:"absolute", top:-2, left:0, right:0, height:3, background:"#00CFFF", borderRadius:2, zIndex:10 }} />
+          )}
+          <PlayerCard player={p} isAdmin={isAdmin}
+            highlight={highlightPid===p.id} selected={selectedPid===p.id} dragging={dragPid===p.id}
+            prevListenerName={p.prevLid?(listeners||[]).find(l=>l.id===p.prevLid)?.name||null:null}
+            onLongPress={()=>onSelectPlayer(p.id)}
+            onTap={()=>{
+              if(selectedPid===p.id) { onEditPlayer(p); return; }
+              if(selectedPid) {
+                // 別のプレイヤーをタップ → 選択を切り替え（移動しない）
+                onSelectPlayer(p.id); return;
+              }
+              // ⚡カード（ageSoon）を管理者モードでタップ → リスナー変更ダイアログ
+              if(isAdmin && p.ageSoon && onAgeSoonSelect) { onAgeSoonSelect(p.id); return; }
+              onSelectPlayer(p.id);
+            }}
+            onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} />
+          {dragOverPid===p.id&&dragOverPos==="after"&&(
+            <div style={{ position:"absolute", bottom:-2, left:0, right:0, height:3, background:"#00CFFF", borderRadius:2, zIndex:10 }} />
+          )}
+          {/* ⚡ ageSoon リスナー変更ダイアログ */}
+          {isAdmin && ageSoonPid===p.id && p.ageSoon && (
+            <div style={{ position:"absolute", top:"100%", left:0, right:0, zIndex:50,
+              background:"var(--color-background-primary)", border:"1.5px solid #FFD54F",
+              borderRadius:10, padding:"10px 12px", marginTop:4,
+              boxShadow:"0 4px 16px rgba(0,0,0,0.18)" }}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{ fontSize:11, color:"#B8860B", fontWeight:600, marginBottom:8 }}>
+                45歳以上担当へ変更：
+              </div>
+              {(seniorListeners||[]).map(l=>(
+                <button key={l.id}
+                  onClick={e=>{ e.stopPropagation(); onMoveTo(l.id, p.id); onAgeSoonSelect(null); }}
+                  style={{ display:"flex", alignItems:"center", gap:8, width:"100%",
+                    padding:"7px 10px", borderRadius:8, border:`1.5px solid ${l.color}`,
+                    background: p.lid===l.id ? l.bg : "var(--color-background-primary)",
+                    cursor:"pointer", marginBottom:5, textAlign:"left" }}>
+                  <span style={{ width:9, height:9, borderRadius:"50%", background:l.bg, border:`2px solid ${l.color}`, flexShrink:0 }} />
+                  <span style={{ fontSize:12, color:l.color, fontWeight:p.lid===l.id?700:400, flex:1 }}>{l.name}</span>
+                  {p.lid===l.id&&<span style={{ fontSize:10, color:l.color }}>現在</span>}
+                </button>
+              ))}
+              <button onClick={e=>{ e.stopPropagation(); onAgeSoonSelect(null); }}
+                style={{ width:"100%", padding:"6px", borderRadius:8, border:"none",
+                  background:"var(--color-background-secondary)", color:"var(--color-text-secondary)",
+                  fontSize:11, cursor:"pointer", marginTop:2 }}>キャンセル</button>
+            </div>
+          )}
+        </div>
+      ))}
+      {isAdmin&&!selectedPid&&(
+        <div onClick={()=>onAddPlayer(listener.id)}
+          style={{ border:"1.5px dashed var(--color-border-secondary)", borderRadius:7,
+            padding:"5px 7px", cursor:"pointer", display:"flex", alignItems:"center",
+            justifyContent:"center", minHeight:28, color:"var(--color-text-tertiary)", fontSize:10, userSelect:"none" }}>
+          ＋ 追加
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Field（フォーム用ラベル付き入力欄） ──────────────────
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:4 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+// ── EditPlayerSheet ───────────────────────────────────────
+function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetire, onClose, allPlayers, allRetired }) {
+  const init = player || { name:"", lid:defaultLid||"l1", status:"normal",
+    ageGroup:"A", joinType:"newgrad_university", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"" };
+  const [data, setData]         = useState({ ...init });
+  const [retireMode, setRetireMode] = useState(false);
+  const [dupWarning, setDupWarning] = useState(null); // 重複警告: null or { name, listenerName, isRetired }
+  const [retireYM, setRetireYM] = useState({ year:TODAY.getFullYear(), month:TODAY.getMonth()+1 });
+
+  const inp = { fontSize:14, padding:"9px 12px", borderRadius:9,
+    border:"0.5px solid var(--color-border-secondary)",
+    background:"var(--color-background-primary)", color:"var(--color-text-primary)",
+    width:"100%", boxSizing:"border-box" };
+  const STATUS_OPTS = [["normal","通常"],["new","新人"],["maternity","産休・育休"]];
+
+  return (
+    <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column",
+      minHeight:"100vh", background:"var(--color-background-primary)" }}>
+      <div style={{ display:"flex", alignItems:"center", padding:"14px 16px 12px",
+        borderBottom:"0.5px solid var(--color-border-tertiary)" }}>
+        <button onClick={onClose}
+          style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)",
+            background:"var(--color-background-secondary)", color:"var(--color-text-primary)",
+            cursor:"pointer", marginRight:12, fontWeight:500 }}>← 戻る</button>
+        <span style={{ fontSize:16, fontWeight:600, flex:1 }}>{isNew?"プレイヤー追加":"プレイヤー編集"}</span>
+      </div>
+      <div style={{ overflowY:"auto", flex:1, padding:"16px 16px 40px" }}>
+        <Field label="氏名 *">
+          <input value={data.name} onChange={e=>{ setData(d=>({...d,name:e.target.value})); setDupWarning(null); }} placeholder="例: 田中 太郎" style={inp} />
+        </Field>
+
+        {/* 生年月日・入社日：新規追加時のみ表示 */}
+        {isNew && (
+          <>
+            <Field label="生年月日">
+              <input type="date" value={data.dob||""} onChange={e=>setData(d=>({...d,dob:e.target.value}))} style={inp} />
+            </Field>
+            <Field label="入社日">
+              <input type="date" value={data.joinDate||""} onChange={e=>setData(d=>({...d,joinDate:e.target.value}))} style={inp} />
+            </Field>
+          </>
+        )}
+
+        <Field label="入社区分">
+          <select value={data.joinType||"newgrad_university"} onChange={e=>setData(d=>({...d,joinType:e.target.value}))} style={inp}>
+            <option value="newgrad_university">新卒②大卒（2週/1回）</option>
+            <option value="newgrad_highschool">新卒①高卒（2ヶ月/1回）</option>
+            <option value="career">中途（2ヶ月/1回）</option>
+          </select>
+        </Field>
+        <Field label="ステータス">
+          <select value={data.status} onChange={e=>setData(d=>({...d,status:e.target.value}))} style={inp}>
+            {STATUS_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+          </select>
+        </Field>
+        {data.status==="maternity"&&(
+          <Field label="復帰予定日">
+            <input type="date" value={data.returnDate||""} onChange={e=>setData(d=>({...d,returnDate:e.target.value}))} style={inp} />
+          </Field>
+        )}
+        <Field label="担当リスナー">
+          <select value={data.lid} onChange={e=>setData(d=>({...d,lid:e.target.value}))} style={inp}>
+            {listeners.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </Field>
+        <Field label="前任担当">
+          <select value={data.prevLid||""} onChange={e=>setData(d=>({...d,prevLid:e.target.value||null}))} style={inp}>
+            <option value="">なし</option>
+            {listeners.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </Field>
+        <button onClick={()=>{
+          if(!data.name.trim()) return;
+          // 新規追加時のみ重複チェック
+          if (isNew && !dupWarning) {
+            const trimmed = data.name.trim();
+            // 在籍者チェック
+            const dupPlayer = (allPlayers||[]).find(p => p.name === trimmed);
+            if (dupPlayer) {
+              const lName = listeners.find(l=>l.id===dupPlayer.lid)?.name || "—";
+              setDupWarning({ name:trimmed, listenerName:lName, isRetired:false });
+              return;
+            }
+            // 退職者チェック
+            const dupRetired = (allRetired||[]).find(r => r.name === trimmed);
+            if (dupRetired) {
+              const lName = listeners.find(l=>l.id===dupRetired.lid)?.name || "—";
+              setDupWarning({ name:trimmed, listenerName:lName, isRetired:true, retiredYear:dupRetired.retiredYear, retiredMonth:dupRetired.retiredMonth });
+              return;
+            }
+          }
+          onSave(data);
+        }}
+          style={{ width:"100%", fontSize:15, padding:13, borderRadius:12, border:"none",
+            background:data.name.trim()?"#185FA5":"#B0C4DE", color:"#fff",
+            cursor:data.name.trim()?"pointer":"default", fontWeight:600, marginTop:8 }}>
+          {isNew?"追加する":"保存する"}
+        </button>
+
+        {/* 重複警告ダイアログ */}
+        {dupWarning && (
+          <div style={{ marginTop:12, background:"#FFF8E1", border:"1.5px solid #FFD93D", borderRadius:12, padding:"14px 16px" }}>
+            <div style={{ fontSize:14, fontWeight:700, color:"#8A6800", marginBottom:8 }}>
+              ⚠ 同じ名前がすでに登録されています
+            </div>
+            <div style={{ fontSize:13, color:"var(--color-text-primary)", marginBottom:4 }}>
+              「{dupWarning.name}」
+            </div>
+            {dupWarning.isRetired ? (
+              <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:12 }}>
+                退職者履歴に存在（{dupWarning.retiredYear}年{dupWarning.retiredMonth}月退職 / 元担当：{dupWarning.listenerName}）
+              </div>
+            ) : (
+              <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginBottom:12 }}>
+                在籍中 / 担当：{dupWarning.listenerName}
+              </div>
+            )}
+            <div style={{ display:"flex", gap:10 }}>
+              <button onClick={()=>{ setDupWarning(null); onSave(data); }}
+                style={{ flex:1, fontSize:13, padding:10, borderRadius:10, border:"0.5px solid var(--color-border-secondary)", background:"none", cursor:"pointer" }}>
+                それでも追加
+              </button>
+              <button onClick={()=>setDupWarning(null)}
+                style={{ flex:1, fontSize:13, padding:10, borderRadius:10, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer", fontWeight:600 }}>
+                キャンセル
+              </button>
+            </div>
+          </div>
+        )}
+        {!isNew&&(
+          <div style={{ marginTop:14 }}>
+            {!retireMode
+              ? <button onClick={()=>setRetireMode(true)}
+                  style={{ width:"100%", fontSize:13, padding:11, borderRadius:10,
+                    border:"0.5px solid #888", background:"none", cursor:"pointer", color:"#888" }}>退職処理</button>
+              : <div style={{ background:"#FFF3CD", borderRadius:12, padding:"14px 16px" }}>
+                  <div style={{ fontSize:14, fontWeight:600, marginBottom:12 }}>⚠ 退職処理：{data.name}さん</div>
+                  <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap", marginBottom:12 }}>
+                    <input type="number" value={retireYM.year} onChange={e=>setRetireYM(p=>({...p,year:e.target.value}))} style={{ ...inp, width:80 }} />
+                    <span>年</span>
+                    <input type="number" min="1" max="12" value={retireYM.month} onChange={e=>setRetireYM(p=>({...p,month:e.target.value}))} style={{ ...inp, width:58 }} />
+                    <span>月</span>
+                  </div>
+                  <div style={{ display:"flex", gap:10 }}>
+                    <button onClick={()=>{ onRetire(data.id,{year:parseInt(retireYM.year),month:parseInt(retireYM.month)}); onClose(); }}
+                      style={{ flex:1, fontSize:14, padding:11, borderRadius:10, border:"none", background:"#C00000", color:"#fff", cursor:"pointer", fontWeight:500 }}>確定</button>
+                    <button onClick={()=>setRetireMode(false)}
+                      style={{ flex:1, fontSize:14, padding:11, borderRadius:10, border:"0.5px solid var(--color-border-secondary)", background:"none", cursor:"pointer" }}>キャンセル</button>
+                  </div>
+                </div>
+            }
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── HistoryPage ───────────────────────────────────────────
+function HistoryPage({ retired, listeners, onRestore, onDelete, onClose, isAdmin }) {
+  const [search, setSearch] = useState("");
+  const filtered = retired.filter(r=>r.name.includes(search));
+  return (
+    <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column",
+      minHeight:"100vh", background:"var(--color-background-primary)" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 16px",
+        borderBottom:"0.5px solid var(--color-border-tertiary)" }}>
+        <button onClick={onClose}
+          style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none",
+            background:"var(--color-background-secondary)", color:"var(--color-text-primary)", border:"0.5px solid var(--color-border-secondary)", cursor:"pointer", fontWeight:500 }}>← 戻る</button>
+        <span style={{ fontSize:15, fontWeight:600, flex:1 }}>退職者履歴</span>
+        <span style={{ fontSize:12, color:"var(--color-text-tertiary)" }}>{filtered.length}名</span>
+      </div>
+      <div style={{ padding:"10px 16px 4px" }}>
+        <input placeholder="氏名で絞り込み" value={search} onChange={e=>setSearch(e.target.value)}
+          style={{ width:"100%", fontSize:14, padding:"8px 12px", borderRadius:9,
+            border:"0.5px solid var(--color-border-secondary)", boxSizing:"border-box" }} />
+      </div>
+      <div style={{ overflowY:"auto", flex:1, padding:"8px 16px 32px" }}>
+        {filtered.length===0
+          ? <div style={{ textAlign:"center", color:"var(--color-text-tertiary)", padding:40 }}>退職者履歴なし</div>
+          : filtered.map(r=>(
+            <div key={r.id} style={{ background:"var(--color-background-secondary)", borderRadius:12,
+              padding:"12px 14px", marginBottom:10 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:15, fontWeight:600 }}>{r.name}</div>
+                  <div style={{ fontSize:12, color:"var(--color-text-secondary)", marginTop:3 }}>
+                    {r.retiredYear}年{r.retiredMonth}月 退職　／　元担当: {listeners.find(l=>l.id===r.lid)?.name||"—"}
+                  </div>
+                </div>
+                {isAdmin && (
+                  <>
+                    <button onClick={()=>onRestore(r.id)}
+                      style={{ fontSize:12, padding:"6px 14px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>復帰</button>
+                    <button onClick={()=>onDelete(r.id)}
+                      style={{ fontSize:12, padding:"6px 12px", borderRadius:8, border:"0.5px solid #C00000", color:"#C00000", background:"none", cursor:"pointer" }}>削除</button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────
+function App() {
+  const [appState,    setAppState]    = useState("loading");
+  const [loadStep,    setLoadStep]    = useState(1); // ローディングステップ
+  const [loadMsg,     setLoadMsg]     = useState(""); // ローディングメッセージ
+  const [pin,         setPin]         = useState("");
+  const [players,     setPlayers]     = useState([]);
+  const [listeners,   setListeners]   = useState([]);
+  const [retired,     setRetired]     = useState([]);
+  const [loadError,   setLoadError]   = useState("");
+  const [saving,      setSaving]      = useState(false);
+  const [saveMsg,     setSaveMsg]     = useState("");
+  const saveTimer = useRef(null);
+
+  // ダッシュボード状態
+  const [boardTab,     setBoardTab]     = useState("youth");
+  // 案A: ボードのスクロール位置保持
+  const boardScrollRef = React.useRef(null);
+  const scrollXRef     = React.useRef(0);
+  const [freqFilter,   setFreqFilter]   = useState("all");
+  const [showFreqFilter,setShowFreqFilter] = useState(false);
+  const [isAdmin,      setIsAdmin]      = useState(false);
+  const [showAdminPin, setShowAdminPin] = useState(false);
+  const [showHistory,  setShowHistory]  = useState(false);
+  const [editPlayer,   setEditPlayer]   = useState(null);
+  const [addForLid,    setAddForLid]    = useState(null);
+  const [selectedPid,  setSelectedPid]  = useState(null);
+  const [dragPid,      setDragPid]      = useState(null);
+  const [dragPos,      setDragPos]      = useState({x:0,y:0});
+  const [dragOverLid,  setDragOverLid]  = useState(null);
+  const [dragOverPid,  setDragOverPid]  = useState(null);
+  const [dragOverPos,  setDragOverPos]  = useState(null);
+  const [highlightLid, setHighlightLid] = useState(null);
+  const [highlightPid, setHighlightPid] = useState(null);
+  const [showSearch,   setShowSearch]   = useState(false);
+  const [searchQuery,  setSearchQuery]  = useState("");
+  const [searchLid,    setSearchLid]    = useState(""); // リスナー絞り込み
+  const [changingLidFor,    setChangingLidFor]    = useState(null);
+  const [careerListeners,   setCareerListeners]   = useState([]); // 中途入社制限リスナーID一覧
+  const [adminNotes,        setAdminNotes]        = useState("");  // 管理者備考
+  const [notesEditMode,     setNotesEditMode]     = useState(false); // 備考編集中
+  const [notesDraft,        setNotesDraft]        = useState("");  // 編集中テキスト
+  const [notesSaving,       setNotesSaving]       = useState(false); // 備考保存中
+  const [ageSoonPid,    setAgeSoonPid]    = useState(null); // ⚡カードのリスナー変更ダイアログ対象PID
+  // ① トースト通知
+  const [toastMsg,     setToastMsg]     = useState("");
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastTimerRef = React.useRef(null);
+  const showToast = React.useCallback((msg) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMsg(msg); setToastVisible(true);
+    toastTimerRef.current = setTimeout(() => setToastVisible(false), 2500);
+  }, []);
+  // ② Undo（1世代前のplayers）
+  const [undoPlayers,  setUndoPlayers]  = useState(null);
+  const [undoVisible,  setUndoVisible]  = useState(false);
+  const undoTimerRef = React.useRef(null);
+  const pushUndo = React.useCallback((prev) => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoPlayers(prev); setUndoVisible(true);
+    undoTimerRef.current = setTimeout(() => setUndoVisible(false), 5000);
+  }, []);
+  // ⑦ 担当変更確認ダイアログ
+  const [pendingMove,  setPendingMove]  = useState(null); // { pid, targetLid }
+  // ⑤ 変更履歴
+  const [changelog,    setChangelog]    = useState(null); // null=未取得, []=取得済み
+  const [changelogLoading, setChangelogLoading] = useState(false);
+  const [alerts,       setAlerts]       = useState([]);
+  const [showAlerts,   setShowAlerts]   = useState(false);
+  const [dismissedIds, setDismissedIds] = useState([]);
+  const changeLogRef = useRef([]); // 未送信の変更ログバッファ
+  const logChange = useCallback((playerName, changeType, before, after) => {
+    const entry = {
+      datetime:   new Date().toLocaleString("ja-JP"),
+      playerName,
+      changeType,
+      before: String(before||""),
+      after:  String(after||""),
+    };
+    changeLogRef.current = [...changeLogRef.current, entry];
+  }, []);
+  const flushChangeLog = useCallback(async (currentPin) => {
+    if (!currentPin || changeLogRef.current.length === 0) return;
+    const logs = [...changeLogRef.current];
+    changeLogRef.current = [];
+    try {
+      await apiPost(currentPin, "saveChangeLog", { logs });
+    } catch(e) { console.error("ChangeLog保存エラー:", e); }
+  }, []);
+
+  // 初回データ読み込み（ウォームアップ + キャッシュ即時表示 + ステップ表示）
+  const loadData = useCallback(async (silent=false) => {
+    if (silent) {
+      // サイレントリロード（バックグラウンド）
+      if (isAdmin) return;
+      try {
+        const data = await apiGet("public");
+        setPlayers(data.players   || []);
+        setListeners(data.listeners|| []);
+        setRetired(data.retired   || []);
+        setCareerListeners(data.careerListeners || []);
+        setAdminNotes(data.notes || "");
+        saveCache(data);
+      } catch(e) { /* サイレント失敗 */ }
+      return;
+    }
+
+    // ── 初回ロード ──────────────────────────────────────
+    // Step1: アプリ起動
+    setLoadStep(1); setLoadMsg("アプリを準備しています...");
+
+    // ① GASをウォームアップ（並行してキャッシュ確認）
+    warmupGAS();
+
+    // ② キャッシュがあれば即座に表示
+    const cached = loadCache();
+    if (cached) {
+      setPlayers(cached.players   || []);
+      setListeners(cached.listeners|| []);
+      setRetired(cached.retired   || []);
+      setCareerListeners(cached.careerListeners || []);
+      setAdminNotes(cached.notes || ""); // ← cached から取得
+      setAppState("dashboard"); // キャッシュで即表示
+      setLoadStep(3); setLoadMsg("バックグラウンドで最新データ取得中...");
+      // バックグラウンドで最新データを取得して更新
+      try {
+        const fresh = await apiGet("public");
+        setPlayers(fresh.players        || []);
+        setListeners(fresh.listeners    || []);
+        setRetired(fresh.retired        || []);
+        setCareerListeners(fresh.careerListeners || []);
+        setAdminNotes(fresh.notes || ""); // ← fresh から取得
+        saveCache(fresh);
+      } catch(e) { /* 失敗してもキャッシュデータを使い続ける */ }
+      return;
+    }
+
+    // キャッシュなし → 通常ロード（ステップ表示付き）
+    // Step2: GAS接続
+    await new Promise(r => setTimeout(r, 300)); // アニメーション表示のため少し待つ
+    setLoadStep(2); setLoadMsg("サーバーに接続しています...");
+
+    try {
+      // Step3: データ取得
+      const data = await apiGet("public");
+      setLoadStep(3); setLoadMsg("データを展開しています...");
+      await new Promise(r => setTimeout(r, 200));
+
+      setPlayers(data.players   || []);
+      setListeners(data.listeners|| []);
+      setRetired(data.retired   || []);
+      setCareerListeners(data.careerListeners || []);
+        setAdminNotes(data.notes || "");
+      saveCache(data); // ② キャッシュに保存
+      setAppState("dashboard");
+    } catch(e) {
+      setLoadError(e.message);
+      setAppState("error");
+    }
+  }, [isAdmin]);
+
+  useEffect(()=>{ loadData(false); }, []);
+
+  // 案A: スクロール位置保持（onScrollで記録、boardScrollRefで復元）
+
+  // 7分ごとに自動リロード（管理者モード中はスキップ）
+  useEffect(()=>{
+    const timer = setInterval(async ()=>{
+      if (isAdmin) return;
+      try {
+        const data = await apiGet("public");
+        setPlayers(data.players        || []);
+        setListeners(data.listeners    || []);
+        setRetired(data.retired        || []);
+        setCareerListeners(data.careerListeners || []);
+        setAdminNotes(data.notes || "");
+        saveCache(data); // キャッシュも更新
+      } catch(e) { /* サイレント失敗 */ }
+    }, 7 * 60 * 1000);
+    return ()=>clearInterval(timer);
+  }, [isAdmin]);
+
+  // ── 自動保存（変更後2秒） ─────────────────────────────
+  const triggerSave = useCallback((newPlayers, newRetired) => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async ()=>{
+      setSaving(true);
+      try {
+        await apiPost(pin, "savePlayers", { players: newPlayers });
+        if (newRetired !== undefined) {
+          await apiPost(pin, "saveRetired", { retired: newRetired });
+        }
+        await flushChangeLog(pin); // 変更履歴を一括送信
+        setSaveMsg("✓ 保存済");
+        setTimeout(()=>setSaveMsg(""), 2000);
+      } catch(e) {
+        setSaveMsg("⚠ 保存エラー: " + e.message);
+      } finally {
+        setSaving(false);
+      }
+    }, 2000);
+  }, [pin, flushChangeLog]);
+
+  // ── プレイヤー操作 ────────────────────────────────────
+  const updatePlayer = (id, data) => {
+    let next = players.map(p=>p.id===id?{...p,...data}:p);
+    // status が maternity に変更された場合、同じ列の一番下に移動
+    if (data.status === "maternity") {
+      const target = next.find(p=>p.id===id);
+      if (target) {
+        next = next.filter(p=>p.id!==id);
+        // 同じ lid の最後尾に挿入
+        const lastIdx = next.reduce((acc, p, i) => p.lid===target.lid ? i : acc, -1);
+        next.splice(lastIdx + 1, 0, target);
+      }
+    }
+    setPlayers(next);
+    if (isAdmin) triggerSave(next);
+  };
+  const addPlayerFn = (data) => {
+    const next = [...players, {
+      id:"p"+Date.now(), ...data,
+      ageSoon:false, statusSoon:false,
+      careerRestricted:false, approvedMismatch:false,
+      age:null,
+    }];
+    setPlayers(next);
+    if (isAdmin) triggerSave(next);
+  };
+  const retirePlayer = (id, {year,month}) => {
+    const p = players.find(x=>x.id===id); if(!p) return;
+    const nextRet = [...retired, { id:"r"+Date.now(), name:p.name, retiredYear:year, retiredMonth:month, lid:p.lid }];
+    const nextPl  = players.filter(x=>x.id!==id);
+    setRetired(nextRet); setPlayers(nextPl);
+    if (isAdmin) triggerSave(nextPl, nextRet);
+  };
+  const restoreRetired = (rid) => {
+    const r = retired.find(x=>x.id===rid); if(!r) return;
+    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad_university", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"", approvedMismatch:false }];
+    const nextRet = retired.filter(x=>x.id!==rid);
+    setPlayers(nextPl); setRetired(nextRet);
+    if (isAdmin) triggerSave(nextPl, nextRet);
+  };
+  const deleteRetired = (rid) => {
+    const nextRet = retired.filter(x=>x.id!==rid);
+    setRetired(nextRet);
+    if (isAdmin) triggerSave(players, nextRet);
+  };
+
+  // ── 移動・並び替え ────────────────────────────────────
+  const movePlayerTo = (pid, targetLid, withUndo=false) => {
+    const next = players.map(p=>{
+      if(p.id!==pid) return p;
+      if(p.lid===targetLid) return p;
+      const now=new Date();
+      let newPrevLid=p.prevLid;
+      if(now>=PREV_LID_START_DATE){
+        const changedAt=p.lastLidChangedAt?new Date(p.lastLidChangedAt):null;
+        const days=changedAt?Math.floor((now-changedAt)/86400000):999;
+        if(days>=PREV_DAYS) newPrevLid=p.lid;
+      }
+      const fromName = listeners.find(l=>l.id===p.lid)?.name || p.lid;
+      const toName   = listeners.find(l=>l.id===targetLid)?.name || targetLid;
+      logChange(p.name, "担当変更", fromName, toName);
+      if (withUndo) {
+        const tName = listeners.find(l=>l.id===targetLid)?.name || targetLid;
+        showToast(`✓ ${p.name}さん → ${tName}`);
+        pushUndo(players); // ② Undo用に現在のplayersを保存
+      }
+      return {...p, lid:targetLid, prevLid:newPrevLid, lastLidChangedAt:new Date().toISOString().split("T")[0], approvedMismatch:false};
+    });
+    setPlayers(next);
+    if(isAdmin) triggerSave(next);
+  };
+  // ミスマッチを承認済みにして保存
+  const approveMismatch = (pid) => {
+    const next = players.map(p => p.id===pid ? {...p, approvedMismatch:true} : p);
+    setPlayers(next);
+    triggerSave(next);
+  };
+
+  const reorderPlayer = (pid, targetPid, pos) => {
+    const arr=[...players];
+    const si=arr.findIndex(p=>p.id===pid), ti=arr.findIndex(p=>p.id===targetPid);
+    if(si===-1||ti===-1||si===ti) return;
+    const [moved]=arr.splice(si,1);
+    const ni=arr.findIndex(p=>p.id===targetPid);
+    arr.splice(pos==="after"?ni+1:ni,0,moved);
+    setPlayers(arr);
+    if(isAdmin) triggerSave(arr);
+  };
+  // ⑦ 選択プレイヤーの移動は確認ダイアログを経由（タップ操作のみ）
+  const moveSelectedTo = (lid) => {
+    if(!selectedPid) return;
+    setPendingMove({ pid: selectedPid, targetLid: lid });
+    setSelectedPid(null);
+  };
+  // ⚡ageSoonダイアログからの移動（特定のpidを指定）
+  const moveSpecificTo = (lid, pid) => { if(!pid||!lid) return; movePlayerTo(pid, lid, true); };
+
+  // ── リスナー列並び替え ────────────────────────────────
+  const [listenerDragId,  setListenerDragId]  = useState(null);
+  const [listenerOverId,  setListenerOverId]  = useState(null);
+
+  const handleListenerDragStart = (lid, x, y) => {
+    setListenerDragId(lid);
+  };
+  const handleListenerDragMove = (x, y) => {
+    const els = document.elementsFromPoint(x, y);
+    const colEl = els.find(el => el?.getAttribute?.("data-listener-id"));
+    const overId = colEl ? colEl.getAttribute("data-listener-id") : null;
+    if (overId && overId !== listenerDragId) setListenerOverId(overId);
+  };
+  const handleListenerDragEnd = async (x, y) => {
+    if (listenerDragId && listenerOverId) {
+      // 並び替え実行（副作用をsetListenersの外に出す）
+      const arr = [...listeners];
+      const si = arr.findIndex(l => l.id === listenerDragId);
+      const ti = arr.findIndex(l => l.id === listenerOverId);
+      if (si !== -1 && ti !== -1 && si !== ti) {
+        const [moved] = arr.splice(si, 1);
+        arr.splice(ti, 0, moved);
+        const withOrder = arr.map((l, idx) => ({ ...l, order: idx }));
+        setListeners(withOrder);
+        // GASへの保存はsetListeners外で実行
+        if (pin) {
+          apiPost(pin, "saveListenerOrder", {
+            order: withOrder.map(l => ({ id: l.id, order: l.order }))
+          }).catch(err => console.error("リスナー順保存エラー:", err));
+        }
+      }
+    }
+    setListenerDragId(null);
+    setListenerOverId(null);
+  };
+
+  // ── プレイヤードラッグ ────────────────────────────────
+  const handleDragStart = (pid,x,y) => { setDragPid(pid); setDragPos({x,y}); setSelectedPid(null); };
+  const COL_BUFFER = 12; // 列左右のバッファゾーン（px）：この幅は列切替を判定しない
+  const handleDragMove  = (x,y) => {
+    setDragPos({x,y});
+    const els=document.elementsFromPoint(x,y);
+    const cardEl=els.find(el=>el?.getAttribute?.("data-player-id"));
+    if(cardEl){
+      const tp=cardEl.getAttribute("data-player-id");
+      if(tp&&tp!==dragPid){
+        const rect=cardEl.getBoundingClientRect();
+        setDragOverPid(tp); setDragOverPos(y<rect.top+rect.height/2?"before":"after"); setDragOverLid(null); return;
+      }
+    }
+    setDragOverPid(null); setDragOverPos(null);
+    const colEl=els.find(el=>el?.getAttribute?.("data-listener-id"));
+    if(colEl){
+      // バッファゾーン：列の左右12pxは判定しない（誤移動防止）
+      const colRect=colEl.getBoundingClientRect();
+      if(x >= colRect.left+COL_BUFFER && x <= colRect.right-COL_BUFFER){
+        setDragOverLid(colEl.getAttribute("data-listener-id"));
+      }
+      // バッファゾーン内は現在の列を維持（nullにしない）
+    } else {
+      setDragOverLid(null);
+    }
+  };
+  const handleDragEnd = (x,y) => {
+    if(dragPid){
+      if(dragOverPid){
+        const src=players.find(p=>p.id===dragPid), tgt=players.find(p=>p.id===dragOverPid);
+        if(src&&tgt){ src.lid===tgt.lid?reorderPlayer(dragPid,dragOverPid,dragOverPos):movePlayerTo(dragPid,tgt.lid,true); }
+      } else if(dragOverLid){ movePlayerTo(dragPid,dragOverLid,true); }
+    }
+    setDragPid(null); setDragOverLid(null); setDragOverPid(null); setDragOverPos(null);
+  };
+
+  // ── 管理者ログイン時アラート ──────────────────────────
+  const handleAdminLogin = (adminPin) => {
+    setIsAdmin(true);
+    setShowAdminPin(false);
+    setPin(adminPin); // ← PINを保存（保存時の認証に使用）
+    const al=[];
+
+    // 産休・育休復帰期限超過
+    players.filter(p=>p.status==="maternity").forEach(p=>{
+      if(p.returnDate&&new Date(p.returnDate)<=TODAY)
+        al.push({type:"maternity", message:`${p.name}さんの産休・育休復帰予定日を過ぎています。`});
+    });
+
+    // 担当リスナーと年齢区分のミスマッチ
+    // ageGroup="B"（45歳以上）なのに、担当リスナーが youth 専任の場合
+    players.filter(p=>p.status!=="maternity" && !p.approvedMismatch).forEach(p=>{
+      const listenerBoard = listeners.find(l=>l.id===p.lid)?.board;
+      if (p.ageGroup==="B" && listenerBoard==="youth") {
+        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+        al.push({ type:"board_mismatch", pid:p.id, message:`${p.name}さんは45歳以上ですが、44歳以下担当の${lName}が担当しています。` });
+      }
+      if (p.ageGroup==="A" && listenerBoard==="senior") {
+        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+        al.push({ type:"board_mismatch", pid:p.id, message:`${p.name}さんは44歳以下ですが、45歳以上担当の${lName}が担当しています。` });
+      }
+    });
+
+    // 中途3年経過→4ヶ月切替予定チェック（45歳以上のみ頻度変化あり）
+    players.filter(p =>
+      p.statusSoon && p.joinType === "career" && p.ageGroup === "B" && !p.approvedMismatch
+    ).forEach(p => {
+      const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+      al.push({
+        type:    "career_switch",
+        pid:     p.id,
+        message: `${p.name}さん（中途）は次期で3年経過し、面談頻度が2ヶ月/1回→4ヶ月/1回に変更予定です。（担当：${lName}）`,
+      });
+    });
+
+    // 中途入社担当ルール違反チェック
+    players.filter(p => p.careerRestricted && !p.approvedMismatch).forEach(p => {
+      if (careerListeners.length > 0 && !careerListeners.includes(p.lid)) {
+        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
+        al.push({
+          type: "career_mismatch",
+          pid:  p.id,
+          message: `${p.name}さんは中途入社3年未満ですが、担当制限外の${lName}が担当しています。`,
+        });
+      }
+    });
+
+    if(al.length>0){setAlerts(al);setShowAlerts(true);setDismissedIds([]);}
+    showToast("🔓 管理者モード");
+  };
+
+  // ── 検索 ─────────────────────────────────────────────
+  const normalizeQ = s => s ? s.replace(/\u9AD9/g,"\u9AD8").toLowerCase() : "";
+  const searchResults = (searchQuery.trim().length>0 || searchLid)
+    ? players.filter(p=>{
+        const nameMatch = searchQuery.trim().length===0 || normalizeQ(p.name).includes(normalizeQ(searchQuery.trim()));
+        const lidMatch  = !searchLid || p.lid===searchLid;
+        return nameMatch && lidMatch && p.status!=="maternity";
+      })
+    : [];
+  const handleSearchSelect = (p) => {
+    // status="new"(3年未満)のプレイヤーはageGroupがBでも44歳以下ボードにいる
+    const goSenior = p.ageGroup==="B" && p.status!=="new";
+    setBoardTab(goSenior?"senior":"youth");
+    setHighlightLid(p.lid); setHighlightPid(p.id);
+    setSearchQuery(""); setSearchLid(""); setShowSearch(false);
+    setTimeout(()=>{
+      document.getElementById(`listener-col-${p.lid}`)?.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});
+      document.getElementById(`player-card-${p.id}`)?.scrollIntoView({behavior:"smooth",block:"center",inline:"nearest"});
+    },100);
+    setTimeout(()=>{setHighlightLid(null);setHighlightPid(null);},3000);
+  };
+
+  // ── ボード計算 ────────────────────────────────────────
+  const boardListeners = listeners.filter(l=>
+    boardTab==="youth"  ? l.board==="youth" ||l.board==="both" :
+    boardTab==="senior" ? l.board==="senior"||l.board==="both" : false
+  );
+  const boardPlayers = players.filter(p=>p.status!=="maternity").filter(p=>{
+    const listenerBoard = listeners.find(l=>l.id===p.lid)?.board || "youth";
+    const onSenior = listenerBoard==="senior" || listenerBoard==="both";
+    const onYouth  = listenerBoard==="youth"  || listenerBoard==="both";
+    // status="new" は ageGroup に関わらず youth 扱い（3年未満は面談頻度変わらず）
+    const effectivelySenior = p.ageGroup==="B" && p.status!=="new";
+    if (boardTab==="youth") {
+      // 44歳以下：ageGroup=A または 3年未満（年齢問わず）
+      // ageSoonでseniorリスナーに先行移動済みかつ status="normal" の場合は除外
+      return (!effectivelySenior) && (onYouth || (!(p.ageSoon && p.status!=="new") && onSenior));
+    }
+    if (boardTab==="senior") {
+      // 45歳以上：ageGroup=B かつ status="normal"、またはageSoonで先行seniorリスナーに移動済み
+      return effectivelySenior || (p.ageGroup==="A" && p.ageSoon && p.status!=="new" && onSenior);
+    }
+    return true;
+  });
+  const loads   = boardListeners.map(l=>boardPlayers.filter(p=>p.lid===l.id).reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon).freq,0));
+  const maxLoad = Math.max(...loads,1);
+
+  // サマリ
+  const newgradCount   = players.filter(p=>p.status==="new"&&(p.joinType==="newgrad_university"||p.joinType==="newgrad")).length;
+  const youthCount     = players.filter(p=>p.ageGroup==="A"&&p.status==="normal").length;
+  const seniorCount    = players.filter(p=>p.ageGroup==="B"&&p.status==="normal").length;
+  const highschoolCount = players.filter(p=>p.status==="new"&&p.joinType==="newgrad_highschool").length;
+  const careerCount    = players.filter(p=>p.status==="new"&&p.joinType==="career").length;
+  const totalActive    = newgradCount+careerCount+youthCount+seniorCount;
+  const matCount       = players.filter(p=>p.status==="maternity").length;
+  const listenerCount  = listeners.filter(l =>
+    // "s"サフィックスなしのIDはそのままカウント
+    // "s"サフィックスありのIDは、同一ベースID（sなし）が存在する場合は除外（同一人物）
+    !l.id.endsWith("s") || !listeners.some(l2 => l2.id === l.id.slice(0, -1))
+  ).length;
+  const BOARD_TABS = [{key:"youth",label:"44歳以下"},{key:"senior",label:"45歳以上"},{key:"detail",label:"詳細"}];
+  const FREQ_TABS  = [{key:"all",label:"全員"},{key:"new",label:"新人（2週/1回）"},{key:"normal",label:"通常（2ヶ月以上）"}];
+
+  // ── 画面分岐 ─────────────────────────────────────────
+  if (appState==="loading") return <LoadingScreen message={loadMsg} step={loadStep} total={3} />;
+  if (appState==="error")   return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"100vh", padding:24, gap:16 }}>
+      <div style={{ fontSize:32 }}>⚠️</div>
+      <div style={{ fontSize:16, fontWeight:600 }}>接続エラー</div>
+      <div style={{ fontSize:13, color:"var(--color-text-secondary)", textAlign:"center" }}>{loadError}</div>
+      <button onClick={()=>{ try{sessionStorage.removeItem("listenerDashboard_cache");}catch(e){} setAppState("loading"); loadData(false); }} style={{ fontSize:14, padding:"8px 20px", borderRadius:9, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>再試行</button>
+    </div>
+  );
+
+
+  // ── ページ切替 ────────────────────────────────────────
+  if (showAdminPin) return <PinScreen title="管理者モード" onSuccess={handleAdminLogin} onCancel={()=>setShowAdminPin(false)} />;
+  if (editPlayer||addForLid) return (
+    <EditPlayerSheet player={editPlayer} isNew={!editPlayer} defaultLid={addForLid}
+      listeners={listeners}
+      allPlayers={players}
+      allRetired={retired}
+      onSave={data=>{ if(editPlayer) updatePlayer(editPlayer.id,data); else addPlayerFn(data); setEditPlayer(null);setAddForLid(null); }}
+      onRetire={retirePlayer}
+      onClose={()=>{setEditPlayer(null);setAddForLid(null);}} />
+  );
+  if (showHistory) return (
+    <HistoryPage retired={retired} listeners={listeners}
+      onRestore={restoreRetired} onDelete={deleteRetired} onClose={()=>setShowHistory(false)} isAdmin={isAdmin} />
+  );
+
+  if (showSearch) {
+    const keyword = searchQuery.trim();
+    return (
+      <div style={{ fontFamily:"var(--font-sans,sans-serif)", display:"flex", flexDirection:"column", height:"100vh", maxHeight:"100vh", background:"var(--color-background-primary)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", flexShrink:0 }}>
+          <button onClick={()=>{setShowSearch(false);setSearchQuery("");setSearchLid("");}} style={{ fontSize:13, padding:"6px 12px", borderRadius:8, border:"none", background:"var(--color-background-secondary)", color:"var(--color-text-primary)", border:"0.5px solid var(--color-border-secondary)", cursor:"pointer", flexShrink:0, fontWeight:500 }}>← 戻る</button>
+          <input autoFocus placeholder="名前を入力（例：高橋、正樹）" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}
+            style={{ flex:1, fontSize:15, padding:"9px 12px", borderRadius:9, border:"1.5px solid #185FA5", outline:"none" }} />
+          {searchQuery&&<button onClick={()=>setSearchQuery("")} style={{ fontSize:18, padding:"2px 8px", border:"none", background:"none", color:"var(--color-text-tertiary)", cursor:"pointer", flexShrink:0 }}>✕</button>}
+        </div>
+        {/* リスナー絞り込みフィルター */}
+        <div style={{ padding:"8px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", flexShrink:0, overflowX:"auto", display:"flex", gap:6, WebkitOverflowScrolling:"touch" }}>
+          <button onClick={()=>setSearchLid("")}
+            style={{ fontSize:11, padding:"4px 10px", borderRadius:16, border:"none", cursor:"pointer", whiteSpace:"nowrap", flexShrink:0,
+              background:searchLid===""?"#185FA5":"var(--color-background-secondary)",
+              color:searchLid===""?"#fff":"var(--color-text-secondary)", fontWeight:searchLid===""?600:400 }}>
+            全員
+          </button>
+          {listeners.map(l=>(
+            <button key={l.id} onClick={()=>setSearchLid(l.id===searchLid?"":l.id)}
+              style={{ fontSize:11, padding:"4px 10px", borderRadius:16, border:`1.5px solid ${l.color}`, cursor:"pointer", whiteSpace:"nowrap", flexShrink:0,
+                background:searchLid===l.id?l.bg:"transparent",
+                color:l.color, fontWeight:searchLid===l.id?700:400 }}>
+              {l.name}
+            </button>
+          ))}
+        </div>
+        <div style={{ padding:"6px 16px", background:"var(--color-background-secondary)", borderBottom:"0.5px solid var(--color-border-tertiary)", fontSize:12, color:"var(--color-text-secondary)", flexShrink:0 }}>
+          <strong style={{ color:"#185FA5" }}>{searchResults.length}件</strong> ヒット
+          {searchLid && <span style={{ marginLeft:8, color:listeners.find(l=>l.id===searchLid)?.color, fontWeight:600 }}>● {listeners.find(l=>l.id===searchLid)?.name}担当</span>}
+        </div>
+        <div style={{ overflowY:"auto", flex:1, WebkitOverflowScrolling:"touch", padding:"6px 14px 24px" }}>
+          {keyword.length===0&&<div style={{ textAlign:"center", color:"var(--color-text-tertiary)", padding:"60px 24px" }}>名前の一部を入力してください</div>}
+          {keyword.length>0&&searchResults.length===0&&<div style={{ textAlign:"center", color:"var(--color-text-tertiary)", padding:"60px 24px" }}>「{keyword}」に一致するプレイヤーが見つかりません</div>}
+          {searchResults.map(p=>{
+            const f=calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon);
+            const lName=listeners.find(l=>l.id===p.lid)?.name||"—";
+            const lColor=listeners.find(l=>l.id===p.lid)?.color||"#888";
+            const cs=freqCardStyle(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon);
+            return (
+              <div key={p.id} onClick={()=>handleSearchSelect(p)}
+                style={{ padding:"12px 14px", borderBottom:"0.5px solid var(--color-border-tertiary)", background:cs.bg, cursor:"pointer", borderRadius:8, marginBottom:4 }}>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:5 }}>
+                  <div style={{ fontSize:15, fontWeight:600, flex:1, minWidth:0 }}>
+                    {keyword?p.name.split(keyword).map((part,i,arr)=>(
+                      <span key={i}>{part}{i<arr.length-1&&<span style={{ background:"#FFD700", color:"#333", borderRadius:3, padding:"0 2px" }}>{keyword}</span>}</span>
+                    )):p.name}
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
+                    <span style={{ width:9, height:9, borderRadius:"50%", background:lColor }} />
+                    <span style={{ fontSize:13, fontWeight:600 }}>{lName}</span>
+                    <span style={{ fontSize:14, color:"var(--color-text-tertiary)" }}>›</span>
+                  </div>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>
+                    {p.ageGroup==="B"?"45歳以上":"44歳以下"}　/　{
+                    p.joinType==="career"?"中途":
+                    p.joinType==="newgrad_highschool"?"新卒（高卒）":"新卒（大卒）"}
+                    {isAdmin && p.age!=null && <span style={{ marginLeft:8, fontWeight:600, color:"#185FA5" }}>{p.age}歳</span>}
+                  </span>
+                  <span style={{ fontSize:10, padding:"2px 8px", borderRadius:10, background:f.bg, color:f.color, fontWeight:600 }}>{f.label}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── メインダッシュボード ──────────────────────────────
+  return (
+    <div style={{ fontFamily:"var(--font-sans,sans-serif)", padding:0,
+      outline:isAdmin?"3px solid #E53935":"none", outlineOffset:-3,
+      minHeight:"100vh", boxSizing:"border-box" }}
+      onClick={()=>{ if(selectedPid) setSelectedPid(null); if(ageSoonPid) setAgeSoonPid(null); }}>
+
+      {/* ヘッダー */}
+      <div style={{ background:isAdmin?"#FFF5F5":"var(--color-background-primary)",
+        borderBottom:isAdmin?"2px solid #E53935":"0.5px solid var(--color-border-tertiary)",
+        padding:"10px 14px 8px", position:"sticky", top:0, zIndex:100 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <span style={{ fontSize:16, fontWeight:700 }}>リスナーダッシュボード</span>
+              {isAdmin&&<span style={{ fontSize:10, padding:"2px 7px", borderRadius:20, background:"#E53935", color:"#fff", fontWeight:600 }}>✏ 編集中</span>}
+            </div>
+            <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginTop:2 }}>
+              📅 {todayStr()}　{periodLabel}
+              {saveMsg&&<span style={{ marginLeft:8, color:saveMsg.startsWith("✓")?"#639922":"#C00000", fontWeight:600, whiteSpace:"nowrap" }}>{saveMsg}</span>}
+              {saving&&<span style={{ marginLeft:8, color:"#185FA5", whiteSpace:"nowrap" }}>保存中...</span>}
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:8, alignItems:"center", flexShrink:0 }}>
+            <button onClick={()=>{setShowSearch(true);setSearchQuery("");}}
+              style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:1,
+                height:44, paddingInline:12, borderRadius:12, border:"1px solid var(--color-border-secondary)",
+                background:"var(--color-background-primary)", cursor:"pointer", userSelect:"none" }}>
+              <span style={{ fontSize:18, lineHeight:1 }}>🔍</span>
+              <span style={{ fontSize:9, color:"var(--color-text-secondary)", fontWeight:500 }}>検索</span>
+            </button>
+            {!isAdmin
+              ? <button onClick={()=>{setShowAdminPin(true);}}
+                  style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:1,
+                    height:44, paddingInline:12, borderRadius:12, border:"1px solid var(--color-border-secondary)",
+                    background:"var(--color-background-primary)", cursor:"pointer", userSelect:"none" }}>
+                  <span style={{ fontSize:18, lineHeight:1 }}>🔐</span>
+                  <span style={{ fontSize:9, color:"var(--color-text-secondary)", fontWeight:500 }}>管理者</span>
+                </button>
+              : <button onClick={()=>{setIsAdmin(false);setSelectedPid(null);}}
+                  style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:1,
+                    height:44, paddingInline:12, borderRadius:12, border:"none", background:"#E53935", cursor:"pointer", userSelect:"none" }}>
+                  <span style={{ fontSize:18, lineHeight:1, color:"#fff" }}>✕</span>
+                  <span style={{ fontSize:9, color:"#fff", fontWeight:500 }}>終了</span>
+                </button>
+            }
+          </div>
+        </div>
+        {isAdmin&&alerts.length>0&&!showAlerts&&(
+          <button onClick={()=>{setShowAlerts(true);setDismissedIds([]);}}
+            style={{ fontSize:11, padding:"3px 10px", borderRadius:20, border:"none", background:"#FFC107", color:"#333", fontWeight:600, cursor:"pointer", marginBottom:4 }}>
+            ⚠ {alerts.length}件の通知
+          </button>
+        )}
+        {isAdmin&&(
+          <div style={{ background:dragPid||selectedPid?"#FFF0C0":"#FFE8E8", border:"0.5px solid #E53935",
+            borderRadius:8, padding:"5px 10px", fontSize:11, color:dragPid||selectedPid?"#8A6800":"#C00000", marginTop:4 }}>
+            {dragPid?`「${players.find(p=>p.id===dragPid)?.name}」ドラッグ中 — 移動先の列で指を離す`
+              :selectedPid?`「${players.find(p=>p.id===selectedPid)?.name}」選択中 — 列タップで移動 / カードタップで編集 / 背景タップでキャンセル`
+              :"長押し or ドラッグで移動。＋追加 で新規追加。"}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding:"10px 14px 0" }}>
+        {/* ボードタブ */}
+        <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
+          <div style={{ display:"flex", flex:1, background:"var(--color-background-secondary)", borderRadius:12, padding:3, gap:3 }}>
+            {BOARD_TABS.map(t=>(
+              <button key={t.key} onClick={()=>{setBoardTab(t.key);setFreqFilter("all");setShowFreqFilter(false);setSelectedPid(null);setChangingLidFor(null);setAgeSoonPid(null);}}
+                style={{ flex:1, fontSize:13, padding:"8px 4px", cursor:"pointer", border:"none", borderRadius:10,
+                  background:boardTab===t.key?(isAdmin?"#E53935":"#185FA5"):"transparent",
+                  color:boardTab===t.key?"#fff":"var(--color-text-secondary)",
+                  fontWeight:boardTab===t.key?700:400, boxShadow:boardTab===t.key?"0 1px 6px rgba(0,0,0,0.15)":"none",
+                  transition:"all 0.18s" }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {boardTab!=="detail"&&(
+            <button onClick={()=>setShowFreqFilter(v=>!v)}
+              style={{ fontSize:11, padding:"8px 12px", borderRadius:10, cursor:"pointer", flexShrink:0, border:"none",
+                background:freqFilter!=="all"?"#44546A":"var(--color-background-secondary)",
+                color:freqFilter!=="all"?"#fff":"var(--color-text-secondary)", fontWeight:freqFilter!=="all"?600:400 }}>
+              {freqFilter==="all"?"絞込 ▼":`${FREQ_TABS.find(t=>t.key===freqFilter)?.label||"絞込中"} ✕`}
+            </button>
+          )}
+        </div>
+        {boardTab!=="detail"&&showFreqFilter&&(
+          <div style={{ display:"flex", background:"var(--color-background-secondary)", borderRadius:10, padding:3, gap:3, marginBottom:10 }}>
+            {FREQ_TABS.map(t=>(
+              <button key={t.key} onClick={()=>{setFreqFilter(t.key);setShowFreqFilter(false);}}
+                style={{ flex:1, fontSize:11, padding:"7px 4px", cursor:"pointer", border:"none", borderRadius:8,
+                  background:freqFilter===t.key?"#44546A":"transparent",
+                  color:freqFilter===t.key?"#fff":"var(--color-text-secondary)", fontWeight:freqFilter===t.key?600:400 }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ボード or 詳細 */}
+      {boardTab==="detail"?(
+        <div style={{ padding:"12px 14px" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+            <div style={{ background:"var(--color-background-secondary)", borderRadius:12, padding:"12px 14px", gridColumn:"1 / 3" }}>
+              <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:4 }}>プレイヤー総数</div>
+              <div style={{ fontSize:28, fontWeight:700, marginBottom:8 }}>{totalActive}名</div>
+              {[
+                {bg:"#FFF0E8",border:"#F5C4A0",count:newgradCount,label:"新卒（2週/1回）"},
+                {bg:"#F0F7E6",border:"#BAE09A",count:youthCount+careerCount,label:"44歳以下通常"},
+                {bg:"#EAF2FB",border:"#A8C9EF",count:seniorCount,label:"45歳以上通常"},
+              ].map(r=>(
+                <div key={r.label} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:5 }}>
+                  <span style={{ width:14, height:14, borderRadius:3, background:r.bg, border:`1px solid ${r.border}`, flexShrink:0 }} />
+                  <span style={{ fontSize:14, fontWeight:700, minWidth:32 }}>{r.count}名</span>
+                  <span style={{ fontSize:12, color:"var(--color-text-secondary)" }}>{r.label}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ background:"var(--color-background-secondary)", borderRadius:12, padding:"12px 14px" }}>
+              <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:4 }}>リスナー人数</div>
+              <div style={{ fontSize:28, fontWeight:700 }}>{listenerCount}名</div>
+              <div style={{ fontSize:10, color:"var(--color-text-tertiary)", marginTop:3 }}>実人数</div>
+            </div>
+            <div style={{ background:matCount>0?"#F9F6FD":"var(--color-background-secondary)", borderRadius:12, padding:"12px 14px", border:matCount>0?"1px solid #C9B8E8":"none" }}>
+              <div style={{ fontSize:11, color:matCount>0?"#7B5EA7":"var(--color-text-secondary)", marginBottom:4 }}>産休・育休中</div>
+              <div style={{ fontSize:28, fontWeight:700, color:matCount>0?"#7B5EA7":"var(--color-text-primary)" }}>{matCount}名</div>
+            </div>
+          </div>
+          {/* 退職者履歴 */}
+          <div style={{ marginTop:8 }}>
+            <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>📋 退職者履歴</div>
+            {retired.length===0
+              ? <div style={{ fontSize:12, color:"var(--color-text-tertiary)", padding:"12px 0" }}>退職者履歴なし</div>
+              : retired.map(r=>(
+                <div key={r.id} style={{ background:"var(--color-background-secondary)", borderRadius:10, padding:"10px 12px", marginBottom:8, display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:600 }}>{r.name}</div>
+                    <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginTop:2 }}>
+                      {r.retiredYear}年{r.retiredMonth}月 退職　／　元担当: {listeners.find(l=>l.id===r.lid)?.name||"—"}
+                    </div>
+                  </div>
+                  {isAdmin && (
+                    <>
+                      <button onClick={()=>restoreRetired(r.id)}
+                        style={{ fontSize:12, padding:"5px 12px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer", flexShrink:0 }}>復帰</button>
+                      <button onClick={()=>deleteRetired(r.id)}
+                        style={{ fontSize:12, padding:"5px 10px", borderRadius:8, border:"0.5px solid #C00000", color:"#C00000", background:"none", cursor:"pointer", flexShrink:0 }}>削除</button>
+                    </>
+                  )}
+                </div>
+              ))
+            }
+          </div>
+          {/* ⑦ 次期切替予告一覧 */}
+          {(()=>{
+            const today = new Date();
+            const nm = today.getMonth();
+            const nextPeriod = nm < 6
+              ? new Date(today.getFullYear(), 6, 1)
+              : new Date(today.getFullYear()+1, 0, 1);
+            const nextLabel = nm < 6 ? `${today.getFullYear()}年7月1日（後期）` : `${today.getFullYear()+1}年1月1日（前期）`;
+
+            const normalSwitch = players.filter(p=>p.statusSoon===true);
+            const ageSwitch    = players.filter(p=>p.ageSoon===true && p.ageGroup==="A" && p.status!=="new"); // 3年未満は除外（頻度変わらず）
+
+            if (normalSwitch.length===0 && ageSwitch.length===0) return null;
+
+            // 45歳以上担当リスナー（board="senior" or "both"）
+            const seniorListeners = listeners.filter(l=>l.board==="senior"||l.board==="both");
+
+            return (
+              <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+                <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>📅 次期切替予告</div>
+                <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:12 }}>
+                  次の期開始日：{nextLabel}
+                  {isAdmin && <span style={{ marginLeft:8, fontSize:10, color:"#185FA5" }}>タップで担当変更</span>}
+                </div>
+
+                {/* 区分A→B切替予定 */}
+                {ageSwitch.length>0&&(
+                  <div style={{ marginBottom:12 }}>
+                    <div style={{ fontSize:12, fontWeight:600, color:"#B8860B", marginBottom:6 }}>🔶 区分A→B（45歳以上へ）{ageSwitch.length}名</div>
+                    {ageSwitch.map(p=>{
+                      const currentL = listeners.find(l=>l.id===p.lid);
+                      return (
+                        <div key={p.id}
+                          onClick={()=>{ if(isAdmin) setChangingLidFor(prev=>prev===p.id?null:p.id); }}
+                          style={{ padding:"8px 10px", background:"#FFFDE7", borderRadius:8, marginBottom:4,
+                            cursor:isAdmin?"pointer":"default",
+                            border: changingLidFor===p.id ? "2px solid #185FA5" : "1px solid transparent",
+                            transition:"border 0.15s" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                            <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{currentL?.name||"—"}</span>
+                            <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>切替予定</span>
+                            {isAdmin && <span style={{ fontSize:11, color:"#185FA5" }}>›</span>}
+                          </div>
+                          {/* リスナー選択パネル */}
+                          {isAdmin && changingLidFor===p.id && (
+                            <div style={{ marginTop:10, paddingTop:10, borderTop:"1px solid #FFD54F" }}>
+                              <div style={{ fontSize:11, color:"#B8860B", fontWeight:600, marginBottom:8 }}>
+                                45歳以上担当リスナーを選択：
+                              </div>
+                              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                                {seniorListeners.map(l=>(
+                                  <button key={l.id}
+                                    onClick={e=>{ e.stopPropagation(); movePlayerTo(p.id, l.id); setChangingLidFor(null); }}
+                                    style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px",
+                                      borderRadius:8, border:`1.5px solid ${l.color}`,
+                                      background: p.lid===l.id ? l.bg : "var(--color-background-primary)",
+                                      cursor:"pointer", textAlign:"left" }}>
+                                    <span style={{ width:10, height:10, borderRadius:"50%", background:l.bg, border:`2px solid ${l.color}`, flexShrink:0 }} />
+                                    <span style={{ fontSize:13, fontWeight: p.lid===l.id?700:400, color:l.color, flex:1 }}>{l.name}</span>
+                                    {p.lid===l.id && <span style={{ fontSize:10, color:l.color }}>現在</span>}
+                                  </button>
+                                ))}
+                              </div>
+                              <button onClick={e=>{ e.stopPropagation(); setChangingLidFor(null); }}
+                                style={{ width:"100%", marginTop:8, padding:"7px", borderRadius:8, border:"none",
+                                  background:"var(--color-background-secondary)", color:"var(--color-text-secondary)",
+                                  fontSize:12, cursor:"pointer" }}>キャンセル</button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* 新人→通常切替予定 */}
+                {normalSwitch.length>0&&(
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 新人→通常（新卒）{normalSwitch.filter(p=>p.joinType==="newgrad_university"||p.joinType==="newgrad").length}名</div>
+                    {normalSwitch.filter(p=>p.joinType==="newgrad_university"||p.joinType==="newgrad").map(p=>(
+                      <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#F0F7E6", borderRadius:8, marginBottom:4 }}>
+                        <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                        <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
+                        <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#BAE09A", color:"#1E5C10", fontWeight:600 }}>新卒3年</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* 中途3年経過→4ヶ月切替予定（45歳以上のみ頻度変化） */}
+                {(()=>{
+                  const careerSwitch = normalSwitch.filter(p=>p.joinType==="career"&&p.ageGroup==="B");
+                  const careerNormal = normalSwitch.filter(p=>p.joinType==="career"&&p.ageGroup==="A");
+                  return (careerSwitch.length>0||careerNormal.length>0)&&(
+                    <div style={{ marginTop:8 }}>
+                      {careerSwitch.length>0&&(
+                        <>
+                          <div style={{ fontSize:12, fontWeight:600, color:"#B8860B", marginBottom:6 }}>⚡ 中途3年経過→4ヶ月切替予定 {careerSwitch.length}名</div>
+                          {careerSwitch.map(p=>(
+                            <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#FFFDE7", borderRadius:8, marginBottom:4 }}>
+                              <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                              <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
+                              <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>2ヶ月→4ヶ月</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      {careerNormal.length>0&&(
+                        <>
+                          <div style={{ fontSize:12, fontWeight:600, color:"#3B6D11", marginBottom:6 }}>🟢 中途3年経過→通常移行（頻度変化なし）{careerNormal.length}名</div>
+                          {careerNormal.map(p=>(
+                            <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#F0F7E6", borderRadius:8, marginBottom:4 }}>
+                              <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
+                              <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
+                              <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#BAE09A", color:"#1E5C10", fontWeight:600 }}>中途3年</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            );
+          })()}
+
+          {/* ⑤ 変更履歴（管理者のみ） */}
+          {isAdmin&&(
+            <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                <div style={{ fontSize:13, fontWeight:600 }}>📋 変更履歴</div>
+                <button onClick={async ()=>{
+                  setChangelogLoading(true);
+                  try {
+                    const res = await apiPost(pin, "getChangelog");
+                    setChangelog(res?.logs || []);
+                  } catch(e) { setChangelog([]); }
+                  finally { setChangelogLoading(false); }
+                }} style={{ fontSize:12, padding:"4px 12px", borderRadius:8,
+                  border:"0.5px solid var(--color-border-secondary)",
+                  background:"var(--color-background-primary)", cursor:"pointer", color:"#185FA5" }}>
+                  {changelogLoading ? "読み込み中..." : changelog===null ? "読み込む" : "更新"}
+                </button>
+              </div>
+              {changelog!==null && (
+                changelog.length===0 ? (
+                  <div style={{ fontSize:12, color:"var(--color-text-tertiary)", padding:"8px 0" }}>変更履歴がありません</div>
+                ) : (
+                  <div style={{ maxHeight:240, overflowY:"auto" }}>
+                    {changelog.map((log,i)=>(
+                      <div key={i} style={{ padding:"8px 10px", borderRadius:8, marginBottom:4,
+                        background:"var(--color-background-secondary)", fontSize:12 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:2 }}>
+                          <span style={{ fontWeight:600, color:"var(--color-text-primary)" }}>{log.playerName}</span>
+                          <span style={{ fontSize:10, color:"var(--color-text-tertiary)" }}>{String(log.datetime).slice(0,16).replace("T"," ")}</span>
+                        </div>
+                        <div style={{ color:"var(--color-text-secondary)" }}>
+                          {log.changeType}：{log.before} → {log.after}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              )}
+            </div>
+          )}
+
+          {/* 📝 備考・特記事項（管理者のみ） */}
+          {isAdmin&&(
+            <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--color-border-tertiary)" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                <div style={{ fontSize:13, fontWeight:600 }}>📝 備考・特記事項</div>
+                {!notesEditMode&&(
+                  <button onClick={()=>{ setNotesDraft(adminNotes); setNotesEditMode(true); }}
+                    style={{ fontSize:12, padding:"4px 12px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)",
+                      background:"var(--color-background-primary)", cursor:"pointer", color:"#185FA5" }}>
+                    ✏ 編集
+                  </button>
+                )}
+              </div>
+              {notesEditMode?(
+                <div>
+                  <textarea value={notesDraft} onChange={e=>setNotesDraft(e.target.value)}
+                    placeholder="面談ルール・特記事項を入力..."
+                    style={{ width:"100%", minHeight:160, fontSize:13, padding:"10px 12px",
+                      borderRadius:10, border:"1.5px solid #185FA5", resize:"vertical",
+                      fontFamily:"inherit", color:"var(--color-text-primary)",
+                      background:"var(--color-background-primary)", boxSizing:"border-box",
+                      lineHeight:1.6, outline:"none" }} />
+                  <div style={{ display:"flex", gap:10, marginTop:8 }}>
+                    <button onClick={async ()=>{
+                      setNotesSaving(true);
+                      try {
+                        await apiPost(pin, "saveNotes", { notes: notesDraft });
+                        setAdminNotes(notesDraft);
+                        setNotesEditMode(false);
+                      } catch(e) { alert("保存エラー: " + e.message); }
+                      finally { setNotesSaving(false); }
+                    }}
+                      disabled={notesSaving}
+                      style={{ flex:1, fontSize:14, padding:11, borderRadius:10, border:"none",
+                        background: notesSaving ? "#B0C4DE" : "#185FA5",
+                        color:"#fff", cursor: notesSaving ? "default" : "pointer", fontWeight:600 }}>
+                      {notesSaving ? "保存中..." : "保存する"}
+                    </button>
+                    <button onClick={()=>setNotesEditMode(false)}
+                      style={{ flex:1, fontSize:14, padding:11, borderRadius:10,
+                        border:"0.5px solid var(--color-border-secondary)",
+                        background:"none", cursor:"pointer", color:"var(--color-text-secondary)" }}>
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              ):(
+                <div style={{ background:"var(--color-background-secondary)", borderRadius:10,
+                  padding:"12px 14px", fontSize:13, color:"var(--color-text-primary)",
+                  lineHeight:1.7, minHeight:60, whiteSpace:"pre-wrap",
+                  color: adminNotes ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>
+                  {adminNotes || "（まだ記録がありません）"}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* パスワード変更（管理者のみ・折りたたみ式） */}
+          {isAdmin && <CollapsiblePin pin={pin} onChangePass={p=>setPin(p)} />}
+        </div>
+      ):(
+        <div ref={boardScrollRef}
+          onScroll={e=>{ scrollXRef.current = e.currentTarget.scrollLeft; }}
+          style={{ display:"flex", gap:4, overflowX:"auto", WebkitOverflowScrolling:"touch", paddingBottom:10, paddingLeft:14, paddingRight:14 }}>
+          {boardListeners.map(l=>{
+            // 通常プレイヤー（産休・育休以外）＋頻度フィルター適用
+            let shown=boardPlayers.filter(p=>p.lid===l.id);
+            // 2週/1回：大卒新卒（newgrad_university/旧newgrad）かつ3年未満
+            if(freqFilter==="new")        shown=shown.filter(p=>p.status==="new"&&!p.statusSoon&&(p.joinType==="newgrad_university"||p.joinType==="newgrad"));
+            // 2週→切替予定：大卒新卒かつstatusSoon
+            if(freqFilter==="statusSoon") shown=shown.filter(p=>p.statusSoon===true&&(p.joinType==="newgrad_university"||p.joinType==="newgrad"));
+            // 2ヶ月→切替予定（45歳以上）
+            if(freqFilter==="ageSoon")    shown=shown.filter(p=>p.ageSoon===true);
+            // 2ヶ月/1回（通常）：status=normal または 高卒・中途の3年未満（同頻度）
+            if(freqFilter==="normal")     shown=shown.filter(p=>(p.status!=="new"&&!p.ageSoon)||(p.status==="new"&&!p.statusSoon&&p.joinType!=="newgrad_university"&&p.joinType!=="newgrad"));
+            // 産休・育休プレイヤーは頻度フィルターに関わらず常に表示
+            const maternityShown = players.filter(p=>p.status==="maternity" && p.lid===l.id);
+            shown = [...shown, ...maternityShown];
+            return (
+              <ListenerColumn key={l.id+"_"+boardTab} listener={l} players={shown} maxLoad={maxLoad} freqFilter={freqFilter}
+                isAdmin={isAdmin} selectedPid={selectedPid}
+                onSelectPlayer={pid=>setSelectedPid(prev=>prev===pid?null:pid)}
+                onEditPlayer={p=>setEditPlayer(p)} onAddPlayer={lid=>setAddForLid(lid)}
+                onMoveTo={(lid, pid)=>pid ? moveSpecificTo(lid, pid) : moveSelectedTo(lid)} highlightLid={highlightLid} highlightPid={highlightPid}
+                dragOverLid={dragOverLid} dragPid={dragPid} dragOverPid={dragOverPid} dragOverPos={dragOverPos}
+                onDragStart={handleDragStart} onDragMove={handleDragMove} onDragEnd={handleDragEnd}
+                isListenerDragging={listenerDragId===l.id}
+                isListenerDragOver={listenerOverId===l.id}
+                onListenerDragStart={handleListenerDragStart}
+                onListenerDragMove={handleListenerDragMove}
+                onListenerDragEnd={handleListenerDragEnd}
+                ageSoonPid={ageSoonPid}
+                onAgeSoonSelect={pid=>setAgeSoonPid(prev=>prev===pid?null:pid)}
+                seniorListeners={listeners.filter(l=>l.board==="senior"||l.board==="both")}
+                listeners={listeners}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* ドラッグゴースト */}
+      {dragPid&&(()=>{
+        const dp=players.find(p=>p.id===dragPid); if(!dp) return null;
+        const cs=freqCardStyle(dp.status,dp.ageGroup,dp.joinType,dp.ageSoon,dp.statusSoon);
+        return <div style={{ position:"fixed", zIndex:999, pointerEvents:"none", left:dragPos.x-44, top:dragPos.y-20, width:88, padding:"5px 7px", background:cs.bg, border:`2px solid ${cs.border}`, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,0.3)", transform:"scale(1.1) rotate(2deg)", opacity:0.95 }}>
+          <span style={{ fontSize:11, fontWeight:600, display:"block", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{dp.name}</span>
+        </div>;
+      })()}
+
+      {/* 退職者履歴ボタン（詳細タブ以外） */}
+      {boardTab!=="detail"&&(
+        <div style={{ padding:"4px 14px 4px", display:"flex", justifyContent:"flex-end" }}>
+          <button onClick={()=>setShowHistory(true)}
+            style={{ fontSize:11, padding:"4px 10px", borderRadius:8, border:"0.5px solid var(--color-border-secondary)", background:"var(--color-background-primary)", color:"var(--color-text-secondary)", cursor:"pointer" }}>
+            📋 退職者履歴
+          </button>
+        </div>
+      )}
+
+
+      {/* 凡例（タブ連動 + タップで絞込） */}
+      {boardTab!=="detail"&&(()=>{
+        const youthLegend = [
+          { key:"new",        bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid",  label:"2週/1回（新人）",    filter:"new"        },
+          { key:"statusSoon", bg:"#FFE8D6", border:"#FF9A6C", borderStyle:"dashed", label:"2週/1回→切替予定",  filter:"statusSoon" },
+          { key:"normal",     bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid",  label:"2ヶ月/1回（通常）",  filter:"normal"     },
+          { key:"ageSoon",    bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted", label:"2ヶ月/1回→切替予定", filter:"ageSoon"    },
+          { key:"maternity",  bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid",  label:"産休・育休",              filter:null         },
+        ];
+        const seniorLegend = [
+          { key:"senior", bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid", label:"4ヶ月/1回（通常）", filter:null },
+        ];
+        const items = boardTab==="senior" ? seniorLegend : youthLegend;
+        return (
+          <div style={{ background:"var(--color-background-secondary)", borderRadius:10, padding:"8px 14px", margin:"4px 14px 14px" }}>
+            <div style={{ fontSize:10, color:"var(--color-text-secondary)", fontWeight:600, marginBottom:6 }}>
+              面談頻度　<span style={{ fontSize:9, color:"var(--color-text-tertiary)", fontWeight:400 }}>タップで絞込</span>
+            </div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {items.map(s=>(
+                <button key={s.key}
+                  onClick={()=>{ if(!s.filter) return; setFreqFilter(prev=>prev===s.filter?"all":s.filter); }}
+                  style={{
+                    display:"flex", alignItems:"center", gap:5,
+                    cursor:s.filter?"pointer":"default",
+                    border:"none", background:"none", padding:"4px 8px", borderRadius:8,
+                    outline: freqFilter===s.filter?"2px solid #185FA5":"none",
+                    outlineOffset:1,
+                  }}>
+                  <span style={{
+                    width:24, height:13, borderRadius:3,
+                    background:s.bg, border:`1.5px ${s.borderStyle} ${s.border}`,
+                    display:"inline-block", flexShrink:0
+                  }} />
+                  <span style={{
+                    fontSize:10, whiteSpace:"nowrap",
+                    color: freqFilter===s.filter?"#185FA5":"var(--color-text-secondary)",
+                    fontWeight: freqFilter===s.filter?600:400
+                  }}>
+                    {s.label}
+                  </span>
+                </button>
+              ))}
+              {freqFilter!=="all"&&(
+                <button onClick={()=>setFreqFilter("all")}
+                  style={{ fontSize:10, padding:"4px 8px", borderRadius:8, border:"none",
+                    background:"#185FA5", color:"#fff", cursor:"pointer", fontWeight:600 }}>
+                  ✕ 解除
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* アラート */}
+      {isAdmin&&showAlerts&&(
+        <AlertPanel alerts={alerts} dismissed={dismissedIds}
+          onDismiss={i=>setDismissedIds(prev=>[...prev,i])} onClose={()=>setShowAlerts(false)}
+          onApprove={approveMismatch} />
+      )}
+
+      {/* ① トースト通知 */}
+      <Toast message={toastMsg} visible={toastVisible} />
+
+      {/* ② Undo バー */}
+      {undoVisible && undoPlayers && (
+        <div style={{ position:"fixed", bottom:88, left:"50%", transform:"translateX(-50%)",
+          display:"flex", gap:12, alignItems:"center",
+          background:"rgba(20,20,20,0.92)", color:"#fff", padding:"10px 18px",
+          borderRadius:20, fontSize:13, zIndex:9998,
+          boxShadow:"0 4px 16px rgba(0,0,0,0.25)", whiteSpace:"nowrap" }}>
+          <span>移動しました</span>
+          <button onClick={()=>{
+            setPlayers(undoPlayers);
+            if(isAdmin) triggerSave(undoPlayers);
+            setUndoVisible(false); setUndoPlayers(null);
+            showToast("↩ 元に戻しました");
+          }} style={{ fontSize:13, padding:"4px 14px", borderRadius:12, border:"none",
+            background:"#fff", color:"#111", cursor:"pointer", fontWeight:700 }}>
+            ↩ 元に戻す
+          </button>
+        </div>
+      )}
+
+      {/* ⑦ 担当変更 確認ダイアログ */}
+      {pendingMove && (()=>{
+        const mover      = players.find(p=>p.id===pendingMove.pid);
+        const toListen   = listeners.find(l=>l.id===pendingMove.targetLid);
+        const fromListen = listeners.find(l=>l.id===mover?.lid);
+        return (
+          <div style={{ position:"fixed", inset:0, zIndex:9997, display:"flex",
+            alignItems:"flex-end", background:"rgba(0,0,0,0.45)" }}
+            onClick={()=>setPendingMove(null)}>
+            <div onClick={e=>e.stopPropagation()}
+              style={{ width:"100%", background:"var(--color-background-primary)",
+                borderRadius:"18px 18px 0 0", padding:"20px 20px 40px" }}>
+              <div style={{ fontSize:15, fontWeight:700, marginBottom:8 }}>担当を変更しますか？</div>
+              <div style={{ fontSize:13, color:"var(--color-text-secondary)", marginBottom:20 }}>
+                {mover?.name}
+                <span style={{ margin:"0 8px", color:"var(--color-text-tertiary)" }}>›</span>
+                {fromListen?.name||"—"}
+                <span style={{ margin:"0 8px", color:"var(--color-text-tertiary)" }}>→</span>
+                {toListen?.name||"—"}
+              </div>
+              <div style={{ display:"flex", gap:12 }}>
+                <button onClick={()=>setPendingMove(null)}
+                  style={{ flex:1, padding:13, borderRadius:12,
+                    border:"0.5px solid var(--color-border-secondary)",
+                    background:"none", fontSize:14, cursor:"pointer" }}>キャンセル</button>
+                <button onClick={()=>{
+                  movePlayerTo(pendingMove.pid, pendingMove.targetLid, true);
+                  setPendingMove(null);
+                }} style={{ flex:1, padding:13, borderRadius:12, border:"none",
+                  background:"#185FA5", color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
+                  移動する
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ── Error Boundary ────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding:24, fontFamily:"sans-serif" }}>
+          <div style={{ fontSize:18, fontWeight:700, color:"#C00000", marginBottom:12 }}>⚠ 表示エラー</div>
+          <div style={{ fontSize:13, color:"#333", background:"#FFF0E8", borderRadius:8, padding:12, wordBreak:"break-all" }}>
+            {String(this.state.error)}
+          </div>
+          <button onClick={()=>window.location.reload()}
+            style={{ marginTop:16, padding:"8px 20px", borderRadius:8, border:"none", background:"#185FA5", color:"#fff", fontSize:14, cursor:"pointer" }}>
+            再読み込み
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <ErrorBoundary><App /></ErrorBoundary>
+);
+</script>
+</body>
+</html>
