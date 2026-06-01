@@ -372,7 +372,8 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   const didDrag    = useRef(false);
   const [pressing, setPressing] = useState(false);
   const [showPrev, setShowPrev] = useState(false); // ② 前任者表示トグル
-  const lastTap = useRef(0); // ダブルタップ検出用
+  const lastTap     = useRef(0);   // ダブルタップ検出用
+  const didDoubleTap = useRef(false); // onClickへの伝達用
   const LONG_MS = 900, DRAG_PX = 8, DBL_MS = 300;
 
   const handlePointerDown = e => {
@@ -407,7 +408,17 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
   const handlePointerUp = e => {
     if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current=null; }
     setPressing(false);
-    if (didDrag.current) { onDragEnd && onDragEnd(e.clientX, e.clientY); didDrag.current=false; }
+    if (didDrag.current) { onDragEnd && onDragEnd(e.clientX, e.clientY); didDrag.current=false; pressOrigin.current=null; return; }
+    // ② ダブルタップ検出（handlePointerUpで行う→admin/非admin共通・確実に発火）
+    const now = Date.now();
+    if (now - lastTap.current < DBL_MS) {
+      didDoubleTap.current = true;
+      if (prevListenerName) setShowPrev(s=>!s);
+      lastTap.current = 0;
+    } else {
+      lastTap.current = now;
+      didDoubleTap.current = false;
+    }
     pressOrigin.current=null;
   };
 
@@ -419,14 +430,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
       onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}
       onClick={(e)=>{
         if(didDrag.current) return;
-        const now = Date.now();
-        const isDouble = now - lastTap.current < DBL_MS;
-        lastTap.current = now;
-        if(isDouble) {
-          // ダブルタップ：前任者表示トグル
-          if(prevListenerName) setShowPrev(s=>!s);
-          return;
-        }
+        if(didDoubleTap.current) { didDoubleTap.current=false; return; } // ダブルタップ済みはスキップ
         if(!isAdmin) return;
         e.stopPropagation(); onTap&&onTap();
       }}
