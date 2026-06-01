@@ -365,13 +365,12 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
 
 // ── PlayerCard ────────────────────────────────────────────
 function PlayerCard({ player, isAdmin, highlight, selected, dragging,
-  onLongPress, onTap, onDragStart, onDragMove, onDragEnd, prevListenerName }) {
+  onLongPress, onTap, onDragStart, onDragMove, onDragEnd }) {
   const cs         = freqCardStyle(player.status, player.ageGroup, player.joinType, player.ageSoon, player.statusSoon);
   const pressTimer = useRef(null);
   const pressOrigin= useRef(null);
   const didDrag    = useRef(false);
   const [pressing, setPressing] = useState(false);
-  const [showPrev, setShowPrev] = useState(false); // 前任者表示トグル
   const LONG_MS = 900, DRAG_PX = 8;
 
   const handlePointerDown = e => {
@@ -417,7 +416,6 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
     <div onPointerDown={handlePointerDown} onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}
       onClick={(e)=>{ if(!isAdmin) return; if(!didDrag.current) { e.stopPropagation(); onTap&&onTap(); } }}
-      onDoubleClick={(e)=>{ e.stopPropagation(); if(prevListenerName) setShowPrev(s=>!s); }}
       style={{ background:cs.bg, border:`${borderWidth} ${(selected||highlight)?"solid":(cs.borderStyle||"solid")} ${borderColor}`,
         borderRadius:7, padding:"5px 7px",
         cursor:isAdmin?(pressing?"grabbing":"pointer"):"default",
@@ -440,13 +438,6 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
       </div>
       {player.status==="maternity" && (
         <div style={{ fontSize:9, color:"#7B5EA7", marginTop:1 }}>産休・育休中</div>
-      )}
-      {prevListenerName && showPrev && (
-        <div style={{ fontSize:8, color:"var(--color-text-tertiary)", marginTop:1,
-          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-          animation:"fadeIn 0.2s ease" }}>
-          前：{prevListenerName}
-        </div>
       )}
     </div>
   );
@@ -582,7 +573,6 @@ function ListenerColumn({ listener, players, maxLoad, isAdmin, selectedPid, onSe
           )}
           <PlayerCard player={p} isAdmin={isAdmin}
             highlight={highlightPid===p.id} selected={selectedPid===p.id} dragging={dragPid===p.id}
-            prevListenerName={p.prevLid?(listeners||[]).find(l=>l.id===p.prevLid)?.name||null:null}
             onLongPress={()=>onSelectPlayer(p.id)}
             onTap={()=>{
               if(selectedPid===p.id) { onEditPlayer(p); return; }
