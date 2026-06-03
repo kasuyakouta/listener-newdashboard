@@ -1235,19 +1235,7 @@ function App() {
         al.push({type:"maternity", message:`${p.name}さんの産休・育休復帰予定日を過ぎています。`});
     });
 
-    // 担当リスナーと年齢区分のミスマッチ
-    // ageGroup="B"（45歳以上）なのに、担当リスナーが youth 専任の場合
-    players.filter(p=>p.status!=="maternity" && !p.approvedMismatch).forEach(p=>{
-      const listenerBoard = listeners.find(l=>l.id===p.lid)?.board;
-      if (p.ageGroup==="B" && listenerBoard==="youth") {
-        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
-        al.push({ type:"board_mismatch", pid:p.id, message:`${p.name}さんは45歳以上ですが、44歳以下担当の${lName}が担当しています。` });
-      }
-      if (p.ageGroup==="A" && listenerBoard==="senior") {
-        const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
-        al.push({ type:"board_mismatch", pid:p.id, message:`${p.name}さんは44歳以下ですが、45歳以上担当の${lName}が担当しています。` });
-      }
-    });
+    // 案A: board_mismatch アラート廃止（リスナーboardでタブ判定に変更のため不要）
 
     // 中途3年経過→4ヶ月切替予定チェック（45歳以上のみ頻度変化あり）
     players.filter(p =>
@@ -1287,9 +1275,10 @@ function App() {
       })
     : [];
   const handleSearchSelect = (p) => {
-    // status="new"(3年未満)のプレイヤーはageGroupがBでも44歳以下ボードにいる
-    const goSenior = p.ageGroup==="B" && p.status!=="new";
-    setBoardTab(goSenior?"senior":"youth");
+    // 案A: リスナーのboardでタブを判定
+    const pListener = listeners.find(l=>l.id===p.lid);
+    const pBoard    = pListener?.board || "youth";
+    setBoardTab(pBoard==="senior"?"senior":"youth");
     setHighlightLid(p.lid); setHighlightPid(p.id);
     setSearchQuery(""); setSearchLid(""); setShowSearch(false);
     setTimeout(()=>{
@@ -1304,21 +1293,14 @@ function App() {
     boardTab==="youth"  ? l.board==="youth" ||l.board==="both" :
     boardTab==="senior" ? l.board==="senior"||l.board==="both" : false
   );
+  // 案A: リスナーのboard設定でタブ判定（ageGroup依存を廃止）
+  // → 年齢・在籍年数に関わらず、所属リスナーのboardでタブが決まる
   const boardPlayers = players.filter(p=>p.status!=="maternity").filter(p=>{
     const listenerBoard = listeners.find(l=>l.id===p.lid)?.board || "youth";
     const onSenior = listenerBoard==="senior" || listenerBoard==="both";
     const onYouth  = listenerBoard==="youth"  || listenerBoard==="both";
-    // status="new" は ageGroup に関わらず youth 扱い（3年未満は面談頻度変わらず）
-    const effectivelySenior = p.ageGroup==="B" && p.status!=="new";
-    if (boardTab==="youth") {
-      // 44歳以下：ageGroup=A または 3年未満（年齢問わず）
-      // ageSoonでseniorリスナーに先行移動済みかつ status="normal" の場合は除外
-      return (!effectivelySenior) && (onYouth || (!(p.ageSoon && p.status!=="new") && onSenior));
-    }
-    if (boardTab==="senior") {
-      // 45歳以上：ageGroup=B かつ status="normal"、またはageSoonで先行seniorリスナーに移動済み
-      return effectivelySenior || (p.ageGroup==="A" && p.ageSoon && p.status!=="new" && onSenior);
-    }
+    if (boardTab==="youth")  return onYouth;
+    if (boardTab==="senior") return onSenior;
     return true;
   });
   const loads   = boardListeners.map(l=>boardPlayers.filter(p=>p.lid===l.id).reduce((s,p)=>s+calcFreq(p.status,p.ageGroup,p.joinType,p.ageSoon,p.statusSoon).freq,0));
