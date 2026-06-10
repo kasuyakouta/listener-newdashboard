@@ -1410,7 +1410,7 @@ function App() {
                     {p.ageGroup==="B"?"45歳以上":"44歳以下"}　/　{
                     p.joinType==="career"?"中途":
                     p.joinType==="newgrad_highschool"?"新卒（高卒）":"新卒（大卒）"}
-                    {isAdmin && typeof p.age === "number" && <span style={{ marginLeft:8, fontWeight:600, color:"#185FA5" }}>{p.age}歳</span>}
+                    {typeof p.age === "number" && <span style={{ marginLeft:8, fontWeight:600, color:"#185FA5" }}>{p.age}歳</span>}
                   </span>
                   <span style={{ fontSize:10, padding:"2px 8px", borderRadius:10, background:f.bg, color:f.color, fontWeight:600 }}>{f.label}</span>
                 </div>
