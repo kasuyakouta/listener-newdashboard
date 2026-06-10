@@ -124,13 +124,13 @@ function calcFreq(status, ageGroup, joinType, ageSoon, statusSoon) {
     } else {
       // 【高卒新卒・中途】3年未満：2ヶ月/1回（年齢に関わらず）
       if (statusSoon && ageGroup === "B")
-        return             { freq:6,  label:"2ヶ月→4ヶ月 切替予定",  bg:"#FFF8E1", color:"#B8860B" };
+        return             { freq:2,  label:"2ヶ月→6ヶ月 切替予定",  bg:"#FFF8E1", color:"#B8860B" };
       const lbl = joinType === "newgrad_highschool" ? "2ヶ月/1回（高卒新卒）" : "2ヶ月/1回（中途新人）";
       return               { freq:6,  label:lbl,                    bg:"#EAF3DE", color:"#3B6D11" };
     }
   }
   // status="normal" のみ
-  if (ageGroup === "B") return { freq:3, label:"4ヶ月/1回（通常）",    bg:"#E6F1FB", color:"#185FA5" };
+  if (ageGroup === "B") return { freq:2, label:"6ヶ月/1回（通常）",    bg:"#E6F1FB", color:"#185FA5" };
   if (ageSoon)          return { freq:6, label:"2ヶ月/1回→切替予定",  bg:"#FFF8E1", color:"#B8860B" };
   return                       { freq:6, label:"2ヶ月/1回（通常）",   bg:"#EAF3DE", color:"#3B6D11" };
 }
@@ -146,7 +146,7 @@ function freqCardStyle(status, ageGroup, joinType, ageSoon, statusSoon) {
       return                 { bg:"#FFF0E8", border:"#F5C4A0", borderStyle:"solid"  }; // 薄オレンジ：2週/1回
     } else {
       // 【高卒新卒・中途】薄グリーン（通常と同色）
-      if (statusSoon && ageGroup === "B") return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" }; // 薄黄色点線：4ヶ月切替予定
+      if (statusSoon && ageGroup === "B") return { bg:"#FFFDE7", border:"#FFD54F", borderStyle:"dotted" }; // 薄黄色点線：6ヶ月切替予定
       if (statusSoon)                     return { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"dotted" }; // 薄グリーン点線：切替間近
       return                                     { bg:"#F0F7E6", border:"#BAE09A", borderStyle:"solid"  }; // 薄グリーン：通常と同じ
     }
@@ -337,7 +337,7 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
                 style={{ position:"absolute", top:6, right:8, fontSize:14, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-tertiary)" }}>✕</button>
               <div style={{ fontWeight:600, marginBottom:4, paddingRight:20,
                 color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":a.type==="career_mismatch"?"#2E7D32":a.type==="career_switch"?"#B8860B":"#8A6800" }}>
-                {a.type==="maternity"?"🩵 産休・育休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":a.type==="career_switch"?"⚡ 中途3年経過→4ヶ月切替予定":"⚠ その他通知"}
+                {a.type==="maternity"?"🩵 産休・育休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":a.type==="career_switch"?"⚡ 中途3年経過→6ヶ月切替予定":"⚠ その他通知"}
               </div>
               <div style={{ color:"var(--color-text-primary)", lineHeight:1.5, marginBottom: a.type==="board_mismatch"?10:0 }}>{a.message}</div>
               {(a.type==="board_mismatch" || a.type==="career_mismatch") && onApprove && a.pid && (
@@ -432,7 +432,7 @@ function PlayerCard({ player, isAdmin, highlight, selected, dragging,
         </span>
         {(
           (player.ageSoon && player.status!=="new" && player.ageGroup!=="B") || // 44歳→45歳切替予定
-          (player.statusSoon && player.joinType==="career" && player.ageGroup==="B") // 中途3年経過→4ヶ月切替予定
+          (player.statusSoon && player.joinType==="career" && player.ageGroup==="B") // 中途3年経過→6ヶ月切替予定
         ) && (
           <span style={{ fontSize:8, flexShrink:0, lineHeight:1 }} title="次期切替予定">⚡</span>
         )}
@@ -1237,7 +1237,7 @@ function App() {
 
     // 案A: board_mismatch アラート廃止（リスナーboardでタブ判定に変更のため不要）
 
-    // 中途3年経過→4ヶ月切替予定チェック（45歳以上のみ頻度変化あり）
+    // 中途3年経過→6ヶ月切替予定チェック（45歳以上のみ頻度変化あり）
     players.filter(p =>
       p.statusSoon && p.joinType === "career" && p.ageGroup === "B" && !p.approvedMismatch
     ).forEach(p => {
@@ -1245,7 +1245,7 @@ function App() {
       al.push({
         type:    "career_switch",
         pid:     p.id,
-        message: `${p.name}さん（中途）は次期で3年経過し、面談頻度が2ヶ月/1回→4ヶ月/1回に変更予定です。（担当：${lName}）`,
+        message: `${p.name}さん（中途）は次期で3年経過し、面談頻度が2ヶ月/1回→6ヶ月/1回に変更予定です。（担当：${lName}）`,
       });
     });
 
@@ -1666,7 +1666,7 @@ function App() {
                     ))}
                   </div>
                 )}
-                {/* 中途3年経過→4ヶ月切替予定（45歳以上のみ頻度変化） */}
+                {/* 中途3年経過→6ヶ月切替予定（45歳以上のみ頻度変化） */}
                 {(()=>{
                   const careerSwitch = normalSwitch.filter(p=>p.joinType==="career"&&p.ageGroup==="B");
                   const careerNormal = normalSwitch.filter(p=>p.joinType==="career"&&p.ageGroup==="A");
@@ -1674,12 +1674,12 @@ function App() {
                     <div style={{ marginTop:8 }}>
                       {careerSwitch.length>0&&(
                         <>
-                          <div style={{ fontSize:12, fontWeight:600, color:"#B8860B", marginBottom:6 }}>⚡ 中途3年経過→4ヶ月切替予定 {careerSwitch.length}名</div>
+                          <div style={{ fontSize:12, fontWeight:600, color:"#B8860B", marginBottom:6 }}>⚡ 中途3年経過→6ヶ月切替予定 {careerSwitch.length}名</div>
                           {careerSwitch.map(p=>(
                             <div key={p.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#FFFDE7", borderRadius:8, marginBottom:4 }}>
                               <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{p.name}</span>
                               <span style={{ fontSize:11, color:"var(--color-text-secondary)" }}>{listeners.find(l=>l.id===p.lid)?.name||"—"}</span>
-                              <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>2ヶ月→4ヶ月</span>
+                              <span style={{ fontSize:10, padding:"2px 7px", borderRadius:10, background:"#FFD54F", color:"#5D4037", fontWeight:600 }}>2ヶ月→6ヶ月</span>
                             </div>
                           ))}
                         </>
@@ -1875,7 +1875,7 @@ function App() {
           { key:"maternity",  bg:"#F3F0F9", border:"#C9B8E8", borderStyle:"solid",  label:"産休・育休",              filter:null         },
         ];
         const seniorLegend = [
-          { key:"senior", bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid", label:"4ヶ月/1回（通常）", filter:null },
+          { key:"senior", bg:"#EAF2FB", border:"#A8C9EF", borderStyle:"solid", label:"6ヶ月/1回（通常）", filter:null },
         ];
         const items = boardTab==="senior" ? seniorLegend : youthLegend;
         return (
