@@ -46,15 +46,18 @@ const { useState, useEffect, useCallback, useRef } = React;
 const GAS_URL = "https://script.google.com/macros/s/AKfycbxFC4C64yrWx-vKq7cyV_kxOsuYpUTN3hKhbK_J-vFA9DY8fvkR-ggp7bn-NhvUoo_Fdg/exec";
 
 // ── 定数 ──────────────────────────────────────────────────
-const TODAY      = new Date();
 const LOAD_WARN  = 100; // 年100回以上で警告
 const PREV_DAYS  = 60;
 const PREV_LID_START_DATE = new Date("2026-06-01"); // 前任記録開始日
 
-function todayStr() {
-  return `${TODAY.getFullYear()}年${TODAY.getMonth()+1}月${TODAY.getDate()}日（${"日月火水木金土"[TODAY.getDay()]}）`;
+// 修正: 日付をモジュール読込時点で固定せず、呼び出し時点の日時を都度受け取る
+// （タブを開いたまま日をまたぐと表示・業務ルール判定が古いままになるバグの対策）
+function todayStr(d = new Date()) {
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${"日月火水木金土"[d.getDay()]}）`;
 }
-const periodLabel = TODAY.getMonth() < 6 ? "前期（1〜6月）" : "後期（7〜12月）";
+function periodLabelFor(d = new Date()) {
+  return d.getMonth() < 6 ? "前期（1〜6月）" : "後期（7〜12月）";
+}
 
 // ── GAS API ──────────────────────────────────────────────
 // ── キャッシュキー ───────────────────────────────────────
@@ -251,7 +254,10 @@ function SettingsTab({ pin, onChangePass }) {
 
   const handle = async () => {
     if (cur !== pin) { setMsg({ text:"現在のPINが違います", ok:false }); return; }
-    if (nw.length < 4) { setMsg({ text:"4桁以上で設定してください", ok:false }); return; }
+    // 修正: ログイン画面（PinScreen）は数字4桁固定の専用キーパッドのため、
+    // それより長い/数字以外を含むPINを設定するとログイン自体が不可能になる。
+    // ここで同じ制約（数字4桁）を強制する。
+    if (!/^\d{4}$/.test(nw)) { setMsg({ text:"新しいPINは数字4桁で設定してください", ok:false }); return; }
     if (nw !== conf) { setMsg({ text:"新しいPINが一致しません", ok:false }); return; }
     try {
       await apiPost(pin, "changePass", { newPass: nw });
@@ -267,10 +273,12 @@ function SettingsTab({ pin, onChangePass }) {
   return (
     <div style={{ padding:"20px 16px" }}>
       <div style={{ fontSize:14, fontWeight:600, marginBottom:16 }}>PIN変更</div>
-      {[["現在のPIN",cur,setCur],["新しいPIN",nw,setNw],["新しいPIN（確認）",conf,setConf]].map(([label,val,set])=>(
+      {[["現在のPIN",cur,setCur,false],["新しいPIN",nw,setNw,true],["新しいPIN（確認）",conf,setConf,true]].map(([label,val,set,restrict])=>(
         <div key={label} style={{ marginBottom:12 }}>
           <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginBottom:4 }}>{label}</div>
-          <input type="password" value={val} onChange={e=>set(e.target.value)} style={{ ...inp, letterSpacing:4 }} />
+          <input type="password" value={val} inputMode={restrict?"numeric":undefined} maxLength={restrict?4:undefined}
+            onChange={e=>set(restrict ? e.target.value.replace(/\D/g,"").slice(0,4) : e.target.value)}
+            style={{ ...inp, letterSpacing:4 }} />
         </div>
       ))}
       {msg.text && <div style={{ fontSize:12, color:msg.ok?"#639922":"#C00000", marginBottom:12, fontWeight:500 }}>
@@ -649,7 +657,10 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
   const [data, setData]         = useState({ ...init });
   const [retireMode, setRetireMode] = useState(false);
   const [dupWarning, setDupWarning] = useState(null); // 重複警告: null or { name, listenerName, isRetired }
-  const [retireYM, setRetireYM] = useState({ year:TODAY.getFullYear(), month:TODAY.getMonth()+1 });
+  const [retireYM, setRetireYM] = useState(() => {
+    const d = new Date();
+    return { year:d.getFullYear(), month:d.getMonth()+1 };
+  });
 
   const inp = { fontSize:14, padding:"9px 12px", borderRadius:9,
     border:"0.5px solid var(--color-border-secondary)",
@@ -852,6 +863,13 @@ function HistoryPage({ retired, listeners, onRestore, onDelete, onClose, isAdmin
 
 // ── App ───────────────────────────────────────────────────
 function App() {
+  // 修正: タブを開いたまま日をまたいでも日付表示が固定されないよう、1分毎に更新するtick
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const [appState,    setAppState]    = useState("loading");
   const [loadStep,    setLoadStep]    = useState(1); // ローディングステップ
   const [loadMsg,     setLoadMsg]     = useState(""); // ローディングメッセージ
@@ -937,7 +955,13 @@ function App() {
     changeLogRef.current = [];
     try {
       await apiPost(currentPin, "saveChangeLog", { logs });
-    } catch(e) { console.error("ChangeLog保存エラー:", e); }
+    } catch(e) {
+      // 修正: 送信失敗時にログを消失させない。バッファへ戻し（この間に追加された分は後ろに残す）、
+      // 呼び出し元（triggerSave）にも失敗を伝えて保存エラー表示・次回再送につなげる。
+      changeLogRef.current = [...logs, ...changeLogRef.current];
+      console.error("ChangeLog保存エラー:", e);
+      throw e;
+    }
   }, []);
 
   // 初回データ読み込み（ウォームアップ + キャッシュ即時表示 + ステップ表示）
@@ -1230,9 +1254,10 @@ function App() {
     setPin(adminPin); // ← PINを保存（保存時の認証に使用）
     const al=[];
 
-    // 産休・育休復帰期限超過
+    // 産休・育休復帰期限超過（判定時点の日時を都度取得。TODAY固定値は使わない）
+    const loginNow = new Date();
     players.filter(p=>p.status==="maternity").forEach(p=>{
-      if(p.returnDate&&new Date(p.returnDate)<=TODAY)
+      if(p.returnDate&&new Date(p.returnDate)<=loginNow)
         al.push({type:"maternity", message:`${p.name}さんの産休・育休復帰予定日を過ぎています。`});
     });
 
@@ -1440,7 +1465,7 @@ function App() {
               {isAdmin&&<span style={{ fontSize:10, padding:"2px 7px", borderRadius:20, background:"#E53935", color:"#fff", fontWeight:600 }}>✏ 編集中</span>}
             </div>
             <div style={{ fontSize:11, color:"var(--color-text-secondary)", marginTop:2 }}>
-              📅 {todayStr()}　{periodLabel}
+              📅 {todayStr(now)}　{periodLabelFor(now)}
               {saveMsg&&<span style={{ marginLeft:8, color:saveMsg.startsWith("✓")?"#639922":"#C00000", fontWeight:600, whiteSpace:"nowrap" }}>{saveMsg}</span>}
               {saving&&<span style={{ marginLeft:8, color:"#185FA5", whiteSpace:"nowrap" }}>保存中...</span>}
             </div>
