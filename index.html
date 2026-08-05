@@ -78,11 +78,15 @@ function loadCache() {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const { timestamp, data } = JSON.parse(raw);
+    // 修正: timestampが壊れている/欠落している場合、NaN比較は常にfalseになり
+    // 「期限切れではない」と誤判定して素通りしてしまうため、明示的に不正値を弾く
+    if (!Number.isFinite(timestamp)) return null;
     if (Date.now() - timestamp > CACHE_MAX_AGE) return null; // 6時間超は破棄
     // キャッシュバリデーション: 必須フィールドの確認
     if (!data || !Array.isArray(data.players) || !Array.isArray(data.listeners)) return null;
-    if (data.players.length > 0 && data.players[0].ageGroup === undefined) return null; // 古いキャッシュを破棄
-    if (data.players.length > 0 && !('age' in data.players[0])) return null; // ageなしキャッシュを破棄
+    // 修正: 先頭1件だけでなく全件をチェック（一部だけ旧スキーマが混在するケースを検出）
+    const hasLegacyPlayer = data.players.some(p => p.ageGroup === undefined || !('age' in p));
+    if (hasLegacyPlayer) return null; // 古い/ageなしキャッシュを破棄
     return data;
   } catch(e) { return null; }
 }
@@ -90,6 +94,12 @@ function loadCache() {
 // 案A: キャッシュを手動クリアする関数（デバッグ用）
 function clearCache() {
   try { localStorage.removeItem(CACHE_KEY); } catch(e) {}
+}
+
+// 修正: "p"+Date.now() は同一ミリ秒内（連続タップ等）で衝突しうるため、
+// ランダム要素を加えて衝突耐性を持たせたID生成に統一する
+function genId(prefix) {
+  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
 // ── GASウォームアップ（レスポンスを待たない） ─────────────
@@ -657,6 +667,9 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
   const [data, setData]         = useState({ ...init });
   const [retireMode, setRetireMode] = useState(false);
   const [dupWarning, setDupWarning] = useState(null); // 重複警告: null or { name, listenerName, isRetired }
+  // 修正: 保存ボタンの連打・素早い2連タップで onSave が二重発火し、
+  // 同一プレイヤーが2件登録されてしまうのを防ぐための送信中フラグ
+  const [submitted, setSubmitted] = useState(false);
   const [retireYM, setRetireYM] = useState(() => {
     const d = new Date();
     return { year:d.getFullYear(), month:d.getMonth()+1 };
@@ -724,7 +737,8 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
             {listeners.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
         </Field>
-        <button onClick={()=>{
+        <button disabled={submitted} onClick={()=>{
+          if(submitted) return; // 二重送信防止
           if(!data.name.trim()) return;
           // 新規追加時のみ重複チェック
           if (isNew && !dupWarning) {
@@ -744,11 +758,12 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
               return;
             }
           }
+          setSubmitted(true);
           onSave(data);
         }}
           style={{ width:"100%", fontSize:15, padding:13, borderRadius:12, border:"none",
-            background:data.name.trim()?"#185FA5":"#B0C4DE", color:"#fff",
-            cursor:data.name.trim()?"pointer":"default", fontWeight:600, marginTop:8 }}>
+            background:(data.name.trim()&&!submitted)?"#185FA5":"#B0C4DE", color:"#fff",
+            cursor:(data.name.trim()&&!submitted)?"pointer":"default", fontWeight:600, marginTop:8 }}>
           {isNew?"追加する":"保存する"}
         </button>
 
@@ -771,8 +786,11 @@ function EditPlayerSheet({ player, isNew, defaultLid, listeners, onSave, onRetir
               </div>
             )}
             <div style={{ display:"flex", gap:10 }}>
-              <button onClick={()=>{ setDupWarning(null); onSave(data); }}
-                style={{ flex:1, fontSize:13, padding:10, borderRadius:10, border:"0.5px solid var(--color-border-secondary)", background:"none", cursor:"pointer" }}>
+              <button disabled={submitted} onClick={()=>{
+                if(submitted) return; // 二重送信防止
+                setDupWarning(null); setSubmitted(true); onSave(data);
+              }}
+                style={{ flex:1, fontSize:13, padding:10, borderRadius:10, border:"0.5px solid var(--color-border-secondary)", background:"none", cursor:submitted?"default":"pointer", opacity:submitted?0.6:1 }}>
                 それでも追加
               </button>
               <button onClick={()=>setDupWarning(null)}
@@ -890,6 +908,11 @@ function App() {
   const [freqFilter,   setFreqFilter]   = useState("all");
   const [showFreqFilter,setShowFreqFilter] = useState(false);
   const [isAdmin,      setIsAdmin]      = useState(false);
+  // 修正: バックグラウンドfetchのコールバック内でisAdminを見る際、
+  // クロージャに古い値が焼き付いて最新のログイン状態を見られないケースがあるため、
+  // 常に最新値を持つrefを併用する（isAdminRef.current を判定に使う）
+  const isAdminRef = useRef(isAdmin);
+  useEffect(() => { isAdminRef.current = isAdmin; }, [isAdmin]);
   const [showAdminPin, setShowAdminPin] = useState(false);
   const [showHistory,  setShowHistory]  = useState(false);
   const [editPlayer,   setEditPlayer]   = useState(null);
@@ -968,7 +991,7 @@ function App() {
   const loadData = useCallback(async (silent=false) => {
     if (silent) {
       // サイレントリロード（バックグラウンド）
-      if (isAdmin) return;
+      if (isAdminRef.current) return;
       try {
         const data = await apiGet("public");
         setPlayers(data.players   || []);
@@ -1001,6 +1024,9 @@ function App() {
       // バックグラウンドで最新データを取得して更新
       try {
         const fresh = await apiGet("public");
+        // 修正: このfetch待機中に管理者ログイン・編集が行われた場合、
+        // サーバーの旧データで上書きして編集内容を消してしまわないようスキップする
+        if (isAdminRef.current) { saveCache(fresh); return; }
         setPlayers(fresh.players        || []);
         setListeners(fresh.listeners    || []);
         setRetired(fresh.retired        || []);
@@ -1042,9 +1068,11 @@ function App() {
   // 7分ごとに自動リロード（管理者モード中はスキップ）
   useEffect(()=>{
     const timer = setInterval(async ()=>{
-      if (isAdmin) return;
+      if (isAdminRef.current) return;
       try {
         const data = await apiGet("public");
+        // 修正: fetch待機中に管理者ログインした場合は反映しない（isAdminRefで再判定）
+        if (isAdminRef.current) { saveCache(data); return; }
         setPlayers(data.players        || []);
         setListeners(data.listeners    || []);
         setRetired(data.retired        || []);
@@ -1095,7 +1123,7 @@ function App() {
   };
   const addPlayerFn = (data) => {
     const next = [...players, {
-      id:"p"+Date.now(), ...data,
+      id:genId("p"), ...data,
       ageSoon:false, statusSoon:false,
       careerRestricted:false, approvedMismatch:false,
       age:null,
@@ -1105,14 +1133,14 @@ function App() {
   };
   const retirePlayer = (id, {year,month}) => {
     const p = players.find(x=>x.id===id); if(!p) return;
-    const nextRet = [...retired, { id:"r"+Date.now(), name:p.name, retiredYear:year, retiredMonth:month, lid:p.lid }];
+    const nextRet = [...retired, { id:genId("r"), name:p.name, retiredYear:year, retiredMonth:month, lid:p.lid }];
     const nextPl  = players.filter(x=>x.id!==id);
     setRetired(nextRet); setPlayers(nextPl);
     if (isAdmin) triggerSave(nextPl, nextRet);
   };
   const restoreRetired = (rid) => {
     const r = retired.find(x=>x.id===rid); if(!r) return;
-    const nextPl  = [...players, { id:"p"+Date.now(), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad_university", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"", approvedMismatch:false }];
+    const nextPl  = [...players, { id:genId("p"), name:r.name, lid:r.lid, status:"normal", ageGroup:"A", ageSoon:false, statusSoon:false, joinType:"newgrad_university", joinDate:"", returnDate:"", prevLid:"", lastLidChangedAt:"", approvedMismatch:false }];
     const nextRet = retired.filter(x=>x.id!==rid);
     setPlayers(nextPl); setRetired(nextRet);
     if (isAdmin) triggerSave(nextPl, nextRet);
@@ -1355,7 +1383,7 @@ function App() {
       <div style={{ fontSize:32 }}>⚠️</div>
       <div style={{ fontSize:16, fontWeight:600 }}>接続エラー</div>
       <div style={{ fontSize:13, color:"var(--color-text-secondary)", textAlign:"center" }}>{loadError}</div>
-      <button onClick={()=>{ try{sessionStorage.removeItem("listenerDashboard_cache");}catch(e){} setAppState("loading"); loadData(false); }} style={{ fontSize:14, padding:"8px 20px", borderRadius:9, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>再試行</button>
+      <button onClick={()=>{ clearCache(); setAppState("loading"); loadData(false); }} style={{ fontSize:14, padding:"8px 20px", borderRadius:9, border:"none", background:"#185FA5", color:"#fff", cursor:"pointer" }}>再試行</button>
     </div>
   );
 
