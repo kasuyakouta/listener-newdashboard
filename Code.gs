@@ -286,8 +286,9 @@ function calcAgeGroup(dobVal) {
 //   J=prevLid, K=lastLidChangedAt, L=approvedMismatch
 function doGet(e) {
   const pin = e.parameter.pin;
-  // "public" は読み取り専用アクセス（PIN不要）
-  // それ以外は正規のPIN認証
+  // 修正: ファイル先頭のセキュリティ方針「全エンドポイントでPIN認証必須」と矛盾しないよう明記。
+  // "public"/"warmup" は個人情報を含まない読み取り専用データ（生年月日・入社日は含まれない）
+  // のためPIN不要の例外としている。書き込み系（doPost）は例外なく全てPIN必須。
   const isPublic = (pin === "public" || pin === "warmup");
   // 修正: doGetの認証確認はログイン試行ではないため、ブルートフォース対策の
   // カウンタは増やさない checkPinOnly を使う（verifyPinWithLockoutは使わない）
@@ -339,15 +340,20 @@ function doGet(e) {
             : "")
         : "";
 
-      // id未設定行への注意: 本来はgenId()で必ずidが付与されるため発生しないはずだが、
-      // シート直接編集等でC列が空になった場合、行番号ベースのidは行の追加/削除で
-      // 変動し既存の編集操作と食い違うリスクがある。空のまま放置せず気づけるようにログする。
-      if (!id) {
-        Logger.log("Players row " + (i + 1) + " ('" + name + "') に id が設定されていません。行番号ベースの仮IDを使用します。");
+      // 修正: 以前は id || ("p"+i) で行番号ベースの仮IDを都度生成していたが、
+      // シート上で行の追加/削除/並び替えが起きるとidが変動し、既存の編集操作
+      // （movePlayerTo等、id基準でマッチング）が別の行に誤爆する恐れがあった。
+      // 空を見つけたその場でUUIDを発行し、C列に書き込んで以後は固定idにする
+      // （セルフヒーリング。次回以降のdoGetでは書き込んだ値がそのまま使われる）
+      let resolvedId = id;
+      if (!resolvedId) {
+        resolvedId = Utilities.getUuid();
+        pSheet.getRange(i + 1, 3).setValue(resolvedId);
+        Logger.log("Players row " + (i + 1) + " ('" + name + "') に id が未設定だったため自動発行: " + resolvedId);
       }
 
       players.push({
-        id:               id || ("p" + i),
+        id:               resolvedId,
         name:             name,
         ageGroup:         ageGroup,       // "A" or "B" のみ
         ageSoon:          ageSoon,        // true=次の期に区分B切替予定
@@ -368,12 +374,18 @@ function doGet(e) {
 
     // ── Settings から careerListeners / notes を取得 ───────
     const stSheet = ss.getSheetByName(SHEET.SETTINGS);
-    let careerListenerIds = ["l1","l5","l6","l10","l12","l13","l14"]; // デフォルト値
+    let careerListenerIds = ["l1","l5","l6","l10","l12","l13","l14"]; // デフォルト値（設定行が無い場合のみ使用）
+    // 修正: 「Settingsに careerListeners 行が無いのでデフォルト適用中」と
+    // 「行はあるが値を意図的に空にした」を呼び出し側が区別できるようにするフラグ。
+    // 前者はcareerListenerIdsが非空（デフォルト7名）になるため実害は無いが、
+    // 後者（行があって空）の場合のみ careerListeners=[] が意図的な設定だと分かる。
+    let careerListenersConfigured = false;
     let adminNotes = "";
     if (stSheet) {
       const stData = stSheet.getDataRange().getValues();
       for (let i = 1; i < stData.length; i++) {
         if (String(stData[i][0]) === "careerListeners") {
+          careerListenersConfigured = true;
           careerListenerIds = String(stData[i][1]).split(",").map(s => s.trim()).filter(s => s);
         }
         if (String(stData[i][0]) === "notes") {
@@ -419,7 +431,12 @@ function doGet(e) {
       });
     }
 
-    return respond({ players, listeners, retired, careerListeners: careerListenerIds, notes: adminNotes });
+    return respond({
+      players, listeners, retired,
+      careerListeners: careerListenerIds,
+      careerListenersConfigured: careerListenersConfigured,
+      notes: adminNotes,
+    });
 
   } catch(err) {
     return respondError("データ取得エラー: " + err.message);
@@ -587,13 +604,18 @@ function doPost(e) {
         const sheet = ss.getSheetByName(SHEET.LISTENERS);
         if (!sheet) return respondError("Listenersシートが見つかりません");
         const data  = sheet.getDataRange().getValues();
-        // F列にorder値を書き込み
+        // 修正: 以前は該当行ごとにsetValueを呼んでいた（リスナー数分APIコールが発生）。
+        // F列を1本の配列として組み立て、一括setValuesで書き込む。
+        // マッチしない行（orderに含まれないid）は既存値を維持する。
+        const orderMap = {};
+        order.forEach(o => { orderMap[o.id] = o.order; });
+        const fColumn = [];
         for (let i = 1; i < data.length; i++) {
-          const id  = data[i][0];
-          const hit = order.find(o => o.id === id);
-          if (hit !== undefined) {
-            sheet.getRange(i + 1, 6).setValue(hit.order);
-          }
+          const id = data[i][0];
+          fColumn.push([ Object.prototype.hasOwnProperty.call(orderMap, id) ? orderMap[id] : data[i][5] ]);
+        }
+        if (fColumn.length > 0) {
+          sheet.getRange(2, 6, fColumn.length, 1).setValues(fColumn);
         }
         return respond({ saved: order.length });
       }
@@ -666,9 +688,17 @@ function doPost(e) {
       if (action === "getChangelog") {
         const clSheet = ss.getSheetByName(SHEET.CHANGELOG);
         if (!clSheet) return respond({ logs: [] });
-        const clData = clSheet.getDataRange().getValues();
+        const lastRow = clSheet.getLastRow();
+        if (lastRow < 2) return respond({ logs: [] });
+        // 修正: 以前はgetDataRange()でシート全件を毎回読んでおり、履歴が
+        // 積み重なるほど読み込みが遅くなっていた。表示する100件+空行バッファ分
+        // （直近150行）だけを読むことで、シート全体のサイズに関わらず一定コストにする。
+        const READ_BUFFER = 150;
+        const startRow = Math.max(2, lastRow - READ_BUFFER + 1);
+        const numRows  = lastRow - startRow + 1;
+        const clData   = clSheet.getRange(startRow, 1, numRows, 5).getValues();
         const logs = [];
-        for (let i = 1; i < clData.length; i++) {
+        for (let i = 0; i < clData.length; i++) {
           if (!clData[i][0]) continue; // 空行スキップ
           logs.push({
             datetime:   String(clData[i][0] || ""),
