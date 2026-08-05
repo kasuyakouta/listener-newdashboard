@@ -332,6 +332,17 @@ function Toast({ message, visible }) {
 }
 
 // ── AlertPanel ────────────────────────────────────────────
+// アラート種別ごとの見た目定義（ネスト三項演算子だと種別追加時に4箇所同時修正が必要で
+// 修正漏れの元だったため、マップに一本化）
+const ALERT_STYLES = {
+  maternity:       { bg:"#EAF3FB", border:"#8EC5E6", color:"#185FA5", icon:"🩵 産休・育休復帰" },
+  board_mismatch:  { bg:"#FFF0E0", border:"#F5A623", color:"#C05A00", icon:"⚠️ 担当ミスマッチ" },
+  career_mismatch: { bg:"#EDF7ED", border:"#5C9E5C", color:"#2E7D32", icon:"🔰 中途担当ルール違反" },
+  career_switch:   { bg:"#FFFBE6", border:"#FFD93D", color:"#B8860B", icon:"⚡ 中途3年経過→6ヶ月切替予定" },
+  config_warning:  { bg:"#FDEDEC", border:"#E57373", color:"#C0392B", icon:"⚙ 設定データ取得エラー" },
+};
+const DEFAULT_ALERT_STYLE = { bg:"#FFFBE6", border:"#FFD93D", color:"#8A6800", icon:"⚠ その他通知" };
+
 function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
   const visible = alerts.filter((_,i)=>!dismissed.includes(i));
   if (visible.length===0) { onClose(); return null; }
@@ -347,16 +358,18 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
           <button onClick={onClose} style={{ fontSize:18, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-secondary)" }}>✕</button>
         </div>
         <div style={{ overflowY:"auto", padding:"10px 12px", display:"flex", flexDirection:"column", gap:8 }}>
-          {alerts.map((a,i)=>dismissed.includes(i)?null:(
+          {alerts.map((a,i)=>{
+            if (dismissed.includes(i)) return null;
+            const st = ALERT_STYLES[a.type] || DEFAULT_ALERT_STYLE;
+            return (
             <div key={i} style={{
-              background:a.type==="maternity"?"#EAF3FB":a.type==="board_mismatch"?"#FFF0E0":a.type==="career_mismatch"?"#EDF7ED":a.type==="career_switch"?"#FFFBE6":"#FFFBE6",
-              border:`1px solid ${a.type==="maternity"?"#8EC5E6":a.type==="board_mismatch"?"#F5A623":a.type==="career_mismatch"?"#5C9E5C":a.type==="career_switch"?"#FFD93D":"#FFD93D"}`,
+              background:st.bg,
+              border:`1px solid ${st.border}`,
               borderRadius:10, padding:"10px 14px 10px 12px", fontSize:12, position:"relative" }}>
               <button onClick={()=>onDismiss(i)}
                 style={{ position:"absolute", top:6, right:8, fontSize:14, background:"none", border:"none", cursor:"pointer", color:"var(--color-text-tertiary)" }}>✕</button>
-              <div style={{ fontWeight:600, marginBottom:4, paddingRight:20,
-                color:a.type==="maternity"?"#185FA5":a.type==="board_mismatch"?"#C05A00":a.type==="career_mismatch"?"#2E7D32":a.type==="career_switch"?"#B8860B":"#8A6800" }}>
-                {a.type==="maternity"?"🩵 産休・育休復帰":a.type==="board_mismatch"?"⚠️ 担当ミスマッチ":a.type==="career_mismatch"?"🔰 中途担当ルール違反":a.type==="career_switch"?"⚡ 中途3年経過→6ヶ月切替予定":"⚠ その他通知"}
+              <div style={{ fontWeight:600, marginBottom:4, paddingRight:20, color:st.color }}>
+                {st.icon}
               </div>
               <div style={{ color:"var(--color-text-primary)", lineHeight:1.5, marginBottom: a.type==="board_mismatch"?10:0 }}>{a.message}</div>
               {(a.type==="board_mismatch" || a.type==="career_mismatch") && onApprove && a.pid && (
@@ -372,7 +385,8 @@ function AlertPanel({ alerts, dismissed, onDismiss, onClose, onApprove }) {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
         <div style={{ padding:"10px 16px", borderTop:"0.5px solid var(--color-border-tertiary)", display:"flex", justifyContent:"flex-end" }}>
           <button onClick={onClose}
@@ -930,6 +944,10 @@ function App() {
   const [searchLid,    setSearchLid]    = useState(""); // リスナー絞り込み
   const [changingLidFor,    setChangingLidFor]    = useState(null);
   const [careerListeners,   setCareerListeners]   = useState([]); // 中途入社制限リスナーID一覧
+  // 修正: 「制限リスナー未設定（空配列が意図的）」と「取得失敗/欠損」を区別するフラグ。
+  // どちらも careerListeners=[] になり中途担当ルール違反チェックが無効化されるため、
+  // 後者の場合は管理者に気づけるようにする
+  const [careerListenersMissing, setCareerListenersMissing] = useState(false);
   const [adminNotes,        setAdminNotes]        = useState("");  // 管理者備考
   const [notesEditMode,     setNotesEditMode]     = useState(false); // 備考編集中
   const [notesDraft,        setNotesDraft]        = useState("");  // 編集中テキスト
@@ -956,8 +974,11 @@ function App() {
   // ⑦ 担当変更確認ダイアログ
   const [pendingMove,  setPendingMove]  = useState(null); // { pid, targetLid }
   // ⑤ 変更履歴
-  const [changelog,    setChangelog]    = useState(null); // null=未取得, []=取得済み
+  const [changelog,    setChangelog]    = useState(null); // null=未取得, []=取得済み（履歴なし含む）
   const [changelogLoading, setChangelogLoading] = useState(false);
+  // 修正: 取得失敗時にchangelog=[]としていたため「履歴なし」と区別できなかった。
+  // エラーメッセージを別stateで保持し、取得失敗時はchangelogをnullに戻して再読込を促す
+  const [changelogError, setChangelogError] = useState("");
   const [alerts,       setAlerts]       = useState([]);
   const [showAlerts,   setShowAlerts]   = useState(false);
   const [dismissedIds, setDismissedIds] = useState([]);
@@ -998,6 +1019,7 @@ function App() {
         setListeners(data.listeners|| []);
         setRetired(data.retired   || []);
         setCareerListeners(data.careerListeners || []);
+        setCareerListenersMissing(!Array.isArray(data.careerListeners));
         setAdminNotes(data.notes || "");
         saveCache(data);
       } catch(e) { /* サイレント失敗 */ }
@@ -1018,6 +1040,7 @@ function App() {
       setListeners(cached.listeners|| []);
       setRetired(cached.retired   || []);
       setCareerListeners(cached.careerListeners || []);
+      setCareerListenersMissing(!Array.isArray(cached.careerListeners));
       setAdminNotes(cached.notes || ""); // ← cached から取得
       setAppState("dashboard"); // キャッシュで即表示
       setLoadStep(3); setLoadMsg("バックグラウンドで最新データ取得中...");
@@ -1031,6 +1054,7 @@ function App() {
         setListeners(fresh.listeners    || []);
         setRetired(fresh.retired        || []);
         setCareerListeners(fresh.careerListeners || []);
+        setCareerListenersMissing(!Array.isArray(fresh.careerListeners));
         setAdminNotes(fresh.notes || ""); // ← fresh から取得
         saveCache(fresh);
       } catch(e) { /* 失敗してもキャッシュデータを使い続ける */ }
@@ -1052,7 +1076,8 @@ function App() {
       setListeners(data.listeners|| []);
       setRetired(data.retired   || []);
       setCareerListeners(data.careerListeners || []);
-        setAdminNotes(data.notes || "");
+      setCareerListenersMissing(!Array.isArray(data.careerListeners));
+      setAdminNotes(data.notes || "");
       saveCache(data); // ② キャッシュに保存
       setAppState("dashboard");
     } catch(e) {
@@ -1077,6 +1102,7 @@ function App() {
         setListeners(data.listeners    || []);
         setRetired(data.retired        || []);
         setCareerListeners(data.careerListeners || []);
+        setCareerListenersMissing(!Array.isArray(data.careerListeners));
         setAdminNotes(data.notes || "");
         saveCache(data); // キャッシュも更新
       } catch(e) { /* サイレント失敗 */ }
@@ -1099,6 +1125,9 @@ function App() {
         setTimeout(()=>setSaveMsg(""), 2000);
       } catch(e) {
         setSaveMsg("⚠ 保存エラー: " + e.message);
+        // 修正: 成功時と違って消えるtimeoutが無く、次の保存成功までエラーが残り続けていた。
+        // エラーは見落とし防止のため少し長めに表示してから消す
+        setTimeout(()=>setSaveMsg(""), 6000);
       } finally {
         setSaving(false);
       }
@@ -1304,6 +1333,14 @@ function App() {
     });
 
     // 中途入社担当ルール違反チェック
+    // 修正: careerListeners=[] は「制限リスナー未設定」と「取得失敗」の両方で起こり得て
+    // ルール違反チェックが黒箱的に無効化されるため、取得失敗側をここで明示的に警告する
+    if (careerListenersMissing) {
+      al.push({
+        type: "config_warning",
+        message: "中途担当ルールの制限リスナー設定が取得できませんでした。中途担当ルール違反チェックはスキップされています（再読み込みで解消する場合があります）。",
+      });
+    }
     players.filter(p => p.careerRestricted && !p.approvedMismatch).forEach(p => {
       if (careerListeners.length > 0 && !careerListeners.includes(p.lid)) {
         const lName = listeners.find(l=>l.id===p.lid)?.name || "—";
@@ -1684,7 +1721,7 @@ function App() {
                               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                                 {seniorListeners.map(l=>(
                                   <button key={l.id}
-                                    onClick={e=>{ e.stopPropagation(); movePlayerTo(p.id, l.id); setChangingLidFor(null); }}
+                                    onClick={e=>{ e.stopPropagation(); movePlayerTo(p.id, l.id, true); setChangingLidFor(null); }}
                                     style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px",
                                       borderRadius:8, border:`1.5px solid ${l.color}`,
                                       background: p.lid===l.id ? l.bg : "var(--color-background-primary)",
@@ -1764,10 +1801,14 @@ function App() {
                 <div style={{ fontSize:13, fontWeight:600 }}>📋 変更履歴</div>
                 <button onClick={async ()=>{
                   setChangelogLoading(true);
+                  setChangelogError("");
                   try {
                     const res = await apiPost(pin, "getChangelog");
                     setChangelog(res?.logs || []);
-                  } catch(e) { setChangelog([]); }
+                  } catch(e) {
+                    setChangelog(null); // 「履歴なし」と混同しないよう未取得状態に戻す
+                    setChangelogError(e.message || "取得に失敗しました");
+                  }
                   finally { setChangelogLoading(false); }
                 }} style={{ fontSize:12, padding:"4px 12px", borderRadius:8,
                   border:"0.5px solid var(--color-border-secondary)",
@@ -1775,6 +1816,9 @@ function App() {
                   {changelogLoading ? "読み込み中..." : changelog===null ? "読み込む" : "更新"}
                 </button>
               </div>
+              {changelogError && (
+                <div style={{ fontSize:12, color:"#C00000", padding:"8px 0" }}>⚠ 取得エラー: {changelogError}</div>
+              )}
               {changelog!==null && (
                 changelog.length===0 ? (
                   <div style={{ fontSize:12, color:"var(--color-text-tertiary)", padding:"8px 0" }}>変更履歴がありません</div>
