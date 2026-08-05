@@ -15,9 +15,12 @@
   <!-- v2026-06-01-A -->
   <title>リスナーダッシュボード</title>
   <!-- v20260602-B -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <!-- 修正: deferを付けてHTML解析をブロックしないようにする（初回表示の高速化）。
+       babel-standaloneはDOMContentLoaded後にtext/babelタグを走査するため、
+       defer実行でも下部のインラインscriptを問題なく処理できる -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -39,7 +42,11 @@
 <body>
 <div id="root"></div>
 
-<script type="text/babel">
+<!-- 修正: data-presets を "react" に限定し、JSX変換のみ行う。
+     指定が無いとBabel-standaloneが不要なES2015+ダウントランスパイルも
+     行おうとし、初回読み込み時のCPU時間を余分に消費していた。
+     対象ブラウザ（iOS Safari等モダン環境）はES2020+をネイティブ対応済み。 -->
+<script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef } = React;
 
 // ── GAS設定 ──────────────────────────────────────────────
@@ -2115,6 +2122,16 @@ class ErrorBoundary extends React.Component {
 ReactDOM.createRoot(document.getElementById("root")).render(
   <ErrorBoundary><App /></ErrorBoundary>
 );
+</script>
+<script>
+  // 修正: sw.js は用意されていたが登録するコードが無く、Service Workerが
+  // 一度も有効化されていなかった（2回目以降の起動を高速化するキャッシュが機能していなかった）。
+  // 初回表示の妨げにならないよう load 完了後に登録する。
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    });
+  }
 </script>
 </body>
 </html>
