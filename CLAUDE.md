@@ -6,7 +6,7 @@
 
 22名のリスナー×208名のプレイヤーの1on1担当割り当てを管理するダッシュボード。
 
-URL: https://kasuyakouta.github.io/listener-newdashboard/
+URL: https://skgroup-dx.github.io/listener-dashboard/ (旧: https://kasuyakouta.github.io/listener-newdashboard/ から移行)
 
 
 
